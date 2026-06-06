@@ -176,7 +176,7 @@ function Index() {
             <div className="text-xs tracking-[0.4em] opacity-70">{signal.direction === "WAIT" ? "NO TRADE" : "DIRECTION"}</div>
             <div className="font-display text-5xl md:text-6xl font-black tracking-widest">{signal.direction}</div>
             <div className="text-sm mt-2 tracking-wider opacity-80">
-              {signal.direction === "WAIT" ? `No live-confirmed setup ${signal.confidence}% — wait` : `Confidence ${signal.confidence}% • LIVE ✓ • HTF ${signal.htfAligned ? "✓ aligned" : "× mixed"}`}
+              {signal.direction === "WAIT" ? `${signal.waitReason} — wait` : `Confidence ${signal.confidence}% • LIVE ✓ • HTF ${signal.htfAligned ? "✓ aligned" : "× mixed"}`}
             </div>
           </div>
 
@@ -184,7 +184,7 @@ function Index() {
 
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-5 text-sm">
             <Stat label="PRICE" value={signal.price.toFixed(5)} />
-            <Stat label="LIVE" value={signal.isLive ? "QUOTE" : "STALE"} />
+            <Stat label="MARKET" value={signal.marketStatus} />
             <Stat label="PRESSURE" value={`${signal.livePressure}%`} />
             <Stat label="RSI" value={signal.rsi.toString()} />
             <Stat label="SMA 20" value={signal.sma20.toFixed(5)} />
