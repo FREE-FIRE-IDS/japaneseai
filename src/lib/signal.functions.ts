@@ -109,16 +109,24 @@ export const generateSignal = createServerFn({ method: "POST" })
     const key = process.env.TWELVE_DATA_API_KEY;
     if (!key) throw new Error("API key not configured");
 
-    // Pull both the execution timeframe and a higher timeframe for trend confluence
-    const [ltf, htf] = await Promise.all([
+    // Pull execution candles, higher-timeframe trend, and the latest live quote together.
+    const [ltf, htf, quote] = await Promise.all([
       fetchSeries(data.pair, data.timeframe, 100, key),
       fetchSeries(data.pair, HTF[data.timeframe], 60, key),
+      fetchQuote(data.pair, key),
     ]);
 
-    const closes = ltf.map((c) => parseFloat(c.close));
+    const latestCandle = ltf[ltf.length - 1];
+    const latestCandleTime = parseMarketTime(latestCandle?.datetime);
+    const isLive = quote.time > 0
+      ? Date.now() - quote.time <= Math.max(90_000, TF_SECONDS[data.timeframe] * 1500)
+      : Date.now() - latestCandleTime <= Math.max(90_000, TF_SECONDS[data.timeframe] * 1500);
+
+    const rawCloses = ltf.map((c) => parseFloat(c.close));
+    const closes = [...rawCloses.slice(0, -1), quote.price];
     const htfCloses = htf.map((c) => parseFloat(c.close));
 
-    const lastPrice = closes[closes.length - 1];
+    const lastPrice = quote.price;
     const prevPrice = closes[closes.length - 2] ?? lastPrice;
 
     const r = rsi(closes, 14);
@@ -133,12 +141,19 @@ export const generateSignal = createServerFn({ method: "POST" })
 
     const m = macd(closes);
     const momentum = ((lastPrice - prevPrice) / prevPrice) * 10000;
+    const candleBodies = ltf.slice(-12).map((c) => Math.abs(parseFloat(c.close) - parseFloat(c.open)));
+    const typicalBody = median(candleBodies);
+    const currentOpen = parseFloat(latestCandle.open);
+    const liveBody = lastPrice - currentOpen;
+    const liveBias = typicalBody > 0 ? Math.abs(liveBody) / typicalBody : 0;
+    const spread = Number.isFinite(quote.bid) && Number.isFinite(quote.ask) ? Math.abs(quote.ask - quote.bid) : 0;
+    const spreadOk = spread === 0 || spread <= Math.max(typicalBody * 0.45, lastPrice * 0.00008);
 
     // Higher timeframe trend
     const htfEma = emaSeries(htfCloses, 21);
     const htfTrendUp = htfCloses[htfCloses.length - 1] > htfEma[htfEma.length - 1];
 
-    // Confluence scoring — each confirmed condition adds weight
+    // Confluence scoring — each confirmed condition adds weight. Live candle and quote freshness are mandatory.
     let bull = 0, bear = 0;
     // RSI zones
     if (r < 30) bull += 2; else if (r < 45) bull += 1;
@@ -155,22 +170,29 @@ export const generateSignal = createServerFn({ method: "POST" })
     if (m.macd > m.signal) bull += 1; else bear += 1;
     // Momentum
     if (momentum > 0) bull += 1; else if (momentum < 0) bear += 1;
+    // Live candle pressure from the current quote, not only closed candles
+    if (liveBody > 0 && liveBias >= 0.35) bull += 2;
+    if (liveBody < 0 && liveBias >= 0.35) bear += 2;
     // HTF confluence (heavy weight — must align)
     if (htfTrendUp) bull += 2; else bear += 2;
 
     const total = bull + bear;
     const dominant = Math.max(bull, bear);
     const agreement = total === 0 ? 0 : dominant / total; // 0.5 - 1.0
+    const wantedDirection = bull > bear ? "BUY" : "SELL";
+    const liveAligned = wantedDirection === "BUY" ? liveBody > 0 && momentum > 0 : liveBody < 0 && momentum < 0;
+    const htfAligned = wantedDirection === "BUY" ? htfTrendUp : !htfTrendUp;
     const direction: "BUY" | "SELL" | "WAIT" =
-      agreement >= 0.72 ? (bull > bear ? "BUY" : "SELL") : "WAIT";
+      isLive && spreadOk && htfAligned && liveAligned && liveBias >= 0.35 && agreement >= 0.82
+        ? wantedDirection
+        : "WAIT";
 
-    // Confidence scaled from agreement (72% → 75 conf, 100% → 98 conf)
+    // Confidence scaled from agreement (82% → 80 conf, 100% → 98 conf)
     const confidence = direction === "WAIT"
-      ? Math.round(agreement * 100)
-      : Math.min(98, Math.round(75 + (agreement - 0.72) * 82));
+      ? Math.round(Math.min(79, agreement * 100))
+      : Math.min(98, Math.round(80 + (agreement - 0.82) * 100));
 
-    const tfSeconds: Record<string, number> = { "1min": 60, "5min": 300, "15min": 900, "30min": 1800 };
-    const expirySeconds = tfSeconds[data.timeframe];
+    const expirySeconds = TF_SECONDS[data.timeframe];
 
     return {
       pair: data.pair,
@@ -186,6 +208,9 @@ export const generateSignal = createServerFn({ method: "POST" })
       expirySeconds,
       generatedAt: Date.now(),
       sparkline: closes.slice(-30),
-      htfAligned: direction === "WAIT" ? false : (direction === "BUY" ? htfTrendUp : !htfTrendUp),
+      htfAligned: direction === "WAIT" ? false : htfAligned,
+      isLive,
+      livePressure: Math.round(liveBias * 100),
+      marketTime: quote.time || latestCandleTime,
     };
   });
