@@ -93,7 +93,7 @@ function Index() {
             onChange={(e) => setPair(e.target.value)}
             className="w-full bg-input text-foreground rounded-lg px-4 py-3 border border-border focus:outline-none focus:ring-2 focus:ring-ring font-display tracking-wider"
           >
-            {pairs.map((p) => <option key={p} value={p}>{p}</option>)}
+            {pairs.map((p: string) => <option key={p} value={p}>{p}</option>)}
           </select>
         </div>
 
