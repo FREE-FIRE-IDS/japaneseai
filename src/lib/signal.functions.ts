@@ -243,14 +243,12 @@ export const generateSignal = createServerFn({ method: "POST" })
   })
   .handler(async ({ data }) => {
     const key = process.env.TWELVE_DATA_API_KEY;
+    const alphaKey = process.env.ALPHA_VANTAGE_API_KEY || "HUO12PIJ5DFCNFPT";
     if (!key) throw new Error("API key not configured");
 
     // Pull execution candles, higher-timeframe trend, and the latest live quote together.
-    const [ltf, htf, quote] = await Promise.all([
-      fetchSeries(data.pair, data.timeframe, 100, key),
-      fetchSeries(data.pair, HTF[data.timeframe], 60, key),
-      fetchQuote(data.pair, key),
-    ]);
+    // If the primary feed is limited/offline, silently switch to Alpha Vantage.
+    const { ltf, htf, quote } = await fetchMarketData(data.pair, data.timeframe, key, alphaKey);
 
     const latestCandle = ltf[ltf.length - 1];
     const latestCandleTime = parseMarketTime(latestCandle?.datetime);
@@ -365,7 +363,7 @@ export const generateSignal = createServerFn({ method: "POST" })
       ? `AI SAYS ${ai.direction}`
       : ai.confidence < 70
       ? "AI CONFIDENCE LOW"
-      : "NO TRADE";
+      : "WAITING FOR CLEAN ENTRY";
 
     // Confidence scaled from agreement (82% → 80 conf, 100% → 98 conf)
     const confidence = direction === "WAIT"
