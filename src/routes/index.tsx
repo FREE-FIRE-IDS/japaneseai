@@ -52,11 +52,28 @@ function Index() {
   async function onGenerate() {
     setLoading(true); setError(null);
     try {
+      // Request notification permission on first generate (mobile-friendly PWA UX)
+      if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "default") {
+        try { await Notification.requestPermission(); } catch { /* ignore */ }
+      }
       const s = await gen({ data: { pair, timeframe } });
-      // Use client time so countdown matches exactly the selected timeframe (no +1 min drift)
       s.generatedAt = Date.now();
       setSignal(s);
       setHistory((h) => [s, ...h].slice(0, 8));
+
+      // Vibrate + notify on confirmed signals only
+      if (s.direction !== "WAIT") {
+        if (typeof navigator !== "undefined" && "vibrate" in navigator) {
+          navigator.vibrate?.([120, 60, 120]);
+        }
+        if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+          new Notification(`${s.direction} ${s.pair}`, {
+            body: `Confidence ${s.confidence}% • ${s.timeframe}`,
+            icon: "/favicon.png",
+            tag: "jb-signal",
+          });
+        }
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to generate signal");
     } finally {
@@ -150,13 +167,17 @@ function Index() {
             style={{
               background: signal.direction === "BUY"
                 ? "linear-gradient(135deg, var(--buy), color-mix(in oklab, var(--buy) 60%, black))"
-                : "linear-gradient(135deg, var(--sell), color-mix(in oklab, var(--sell) 60%, black))",
-              color: "#0a0a0a",
+                : signal.direction === "SELL"
+                ? "linear-gradient(135deg, var(--sell), color-mix(in oklab, var(--sell) 60%, black))"
+                : "linear-gradient(135deg, #555, #222)",
+              color: signal.direction === "WAIT" ? "#eee" : "#0a0a0a",
             }}
           >
-            <div className="text-xs tracking-[0.4em] opacity-70">DIRECTION</div>
+            <div className="text-xs tracking-[0.4em] opacity-70">{signal.direction === "WAIT" ? "NO TRADE" : "DIRECTION"}</div>
             <div className="font-display text-5xl md:text-6xl font-black tracking-widest">{signal.direction}</div>
-            <div className="text-sm mt-2 tracking-wider opacity-80">Confidence {signal.confidence}%</div>
+            <div className="text-sm mt-2 tracking-wider opacity-80">
+              {signal.direction === "WAIT" ? `Low confluence ${signal.confidence}% — wait for setup` : `Confidence ${signal.confidence}% • HTF ${signal.htfAligned ? "✓ aligned" : "× mixed"}`}
+            </div>
           </div>
 
           <Sparkline data={signal.sparkline} direction={signal.direction} />
