@@ -186,6 +186,19 @@ export const generateSignal = createServerFn({ method: "POST" })
       isLive && spreadOk && htfAligned && liveAligned && liveBias >= 0.35 && agreement >= 0.82
         ? wantedDirection
         : "WAIT";
+    const waitReason = !isLive
+      ? "MARKET CLOSED / STALE DATA"
+      : !spreadOk
+      ? "SPREAD TOO HIGH"
+      : !htfAligned
+      ? "HTF NOT ALIGNED"
+      : !liveAligned
+      ? "LIVE CANDLE NOT CONFIRMED"
+      : liveBias < 0.35
+      ? "WEAK LIVE PRESSURE"
+      : agreement < 0.82
+      ? "LOW CONFLUENCE"
+      : "NO TRADE";
 
     // Confidence scaled from agreement (82% → 80 conf, 100% → 98 conf)
     const confidence = direction === "WAIT"
@@ -210,6 +223,8 @@ export const generateSignal = createServerFn({ method: "POST" })
       sparkline: closes.slice(-30),
       htfAligned: direction === "WAIT" ? false : htfAligned,
       isLive,
+      marketStatus: isLive ? "LIVE" : "MARKET CLOSED",
+      waitReason: direction === "WAIT" ? waitReason : "LIVE CONFIRMED",
       livePressure: Math.round(liveBias * 100),
       marketTime: quote.time || latestCandleTime,
     };
