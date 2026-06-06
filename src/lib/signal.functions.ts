@@ -101,6 +101,68 @@ async function fetchQuote(pair: string, key: string) {
   return { price, bid, ask, time: parseMarketTime(json.datetime, json.timestamp) };
 }
 
+const AiSignalSchema = z.object({
+  direction: z.enum(["BUY", "SELL", "WAIT"]),
+  confidence: z.number(),
+  reason: z.string(),
+});
+
+async function askAiForSignal(input: {
+  pair: string;
+  timeframe: string;
+  price: number;
+  closes: number[];
+  htfCloses: number[];
+  rsi: number;
+  sma20: number;
+  sma50: number;
+  ema9: number;
+  ema21: number;
+  macdHist: number;
+  momentum: number;
+  liveBody: number;
+  liveBias: number;
+  htfTrendUp: boolean;
+  spreadOk: boolean;
+}) {
+  const key = process.env.LOVABLE_API_KEY;
+  if (!key) return { direction: "WAIT" as Direction, confidence: 0, reason: "AI unavailable" };
+
+  const gateway = createLovableAiGatewayProvider(key);
+  const { output } = await generateText({
+    model: gateway("google/gemini-3-flash-preview"),
+    output: Output.object({ schema: AiSignalSchema }),
+    system: "You are a strict live forex signal risk filter. Never invent market data. Use only the supplied candles, quote, and indicators. Return WAIT unless live momentum, trend, and candle pressure are clearly aligned. No guaranteed-profit claims.",
+    prompt: JSON.stringify({
+      pair: input.pair,
+      timeframe: input.timeframe,
+      liveQuote: input.price,
+      lastCloses: input.closes.slice(-24),
+      higherTimeframeCloses: input.htfCloses.slice(-18),
+      indicators: {
+        rsi: input.rsi,
+        sma20: input.sma20,
+        sma50: input.sma50,
+        ema9: input.ema9,
+        ema21: input.ema21,
+        macdHist: input.macdHist,
+        momentum: input.momentum,
+        liveBody: input.liveBody,
+        livePressureRatio: input.liveBias,
+        htfTrendUp: input.htfTrendUp,
+        spreadOk: input.spreadOk,
+      },
+      rule: "direction must be BUY, SELL, or WAIT. Use WAIT if uncertain, mixed, stale-looking, or weak pressure. confidence 0-98.",
+    }),
+  });
+
+  return {
+    direction: output.direction as Direction,
+    confidence: Math.max(0, Math.min(98, Math.round(output.confidence))),
+    reason: output.reason.slice(0, 140),
+  };
+}
+
 export const getPairs = createServerFn({ method: "GET" }).handler(async () => PAIRS);
 
 export const generateSignal = createServerFn({ method: "POST" })
