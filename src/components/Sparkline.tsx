@@ -1,4 +1,4 @@
-export function Sparkline({ data, direction }: { data: number[]; direction: "BUY" | "SELL" }) {
+export function Sparkline({ data, direction }: { data: number[]; direction: "BUY" | "SELL" | "WAIT" }) {
   if (!data.length) return null;
   const min = Math.min(...data);
   const max = Math.max(...data);
@@ -10,7 +10,7 @@ export function Sparkline({ data, direction }: { data: number[]; direction: "BUY
     return `${x},${y}`;
   }).join(" ");
 
-  const color = direction === "BUY" ? "var(--buy)" : "var(--sell)";
+  const color = direction === "BUY" ? "var(--buy)" : direction === "SELL" ? "var(--sell)" : "#888";
 
   return (
     <svg viewBox={`0 0 ${w} ${h}`} className="w-full h-32" preserveAspectRatio="none">
