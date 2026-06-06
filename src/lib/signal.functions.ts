@@ -1,7 +1,11 @@
 import { createServerFn } from "@tanstack/react-start";
+import { generateText, Output } from "ai";
+import { z } from "zod";
+import { createLovableAiGatewayProvider } from "@/lib/ai-gateway.server";
 
 type Candle = { datetime: string; open: string; high: string; low: string; close: string };
 type Quote = { close?: string; bid?: string; ask?: string; datetime?: string; timestamp?: number; status?: string; message?: string };
+type Direction = "BUY" | "SELL" | "WAIT";
 
 const PAIRS = [
   "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD", "USD/CHF", "NZD/USD",
@@ -97,6 +101,68 @@ async function fetchQuote(pair: string, key: string) {
   return { price, bid, ask, time: parseMarketTime(json.datetime, json.timestamp) };
 }
 
+const AiSignalSchema = z.object({
+  direction: z.enum(["BUY", "SELL", "WAIT"]),
+  confidence: z.number(),
+  reason: z.string(),
+});
+
+async function askAiForSignal(input: {
+  pair: string;
+  timeframe: string;
+  price: number;
+  closes: number[];
+  htfCloses: number[];
+  rsi: number;
+  sma20: number;
+  sma50: number;
+  ema9: number;
+  ema21: number;
+  macdHist: number;
+  momentum: number;
+  liveBody: number;
+  liveBias: number;
+  htfTrendUp: boolean;
+  spreadOk: boolean;
+}) {
+  const key = process.env.LOVABLE_API_KEY;
+  if (!key) return { direction: "WAIT" as Direction, confidence: 0, reason: "AI unavailable" };
+
+  const gateway = createLovableAiGatewayProvider(key);
+  const { output } = await generateText({
+    model: gateway("google/gemini-3-flash-preview"),
+    output: Output.object({ schema: AiSignalSchema }),
+    system: "You are a strict live forex signal risk filter. Never invent market data. Use only the supplied candles, quote, and indicators. Return WAIT unless live momentum, trend, and candle pressure are clearly aligned. No guaranteed-profit claims.",
+    prompt: JSON.stringify({
+      pair: input.pair,
+      timeframe: input.timeframe,
+      liveQuote: input.price,
+      lastCloses: input.closes.slice(-24),
+      higherTimeframeCloses: input.htfCloses.slice(-18),
+      indicators: {
+        rsi: input.rsi,
+        sma20: input.sma20,
+        sma50: input.sma50,
+        ema9: input.ema9,
+        ema21: input.ema21,
+        macdHist: input.macdHist,
+        momentum: input.momentum,
+        liveBody: input.liveBody,
+        livePressureRatio: input.liveBias,
+        htfTrendUp: input.htfTrendUp,
+        spreadOk: input.spreadOk,
+      },
+      rule: "direction must be BUY, SELL, or WAIT. Use WAIT if uncertain, mixed, stale-looking, or weak pressure. confidence 0-98.",
+    }),
+  });
+
+  return {
+    direction: output.direction as Direction,
+    confidence: Math.max(0, Math.min(98, Math.round(output.confidence))),
+    reason: output.reason.slice(0, 140),
+  };
+}
+
 export const getPairs = createServerFn({ method: "GET" }).handler(async () => PAIRS);
 
 export const generateSignal = createServerFn({ method: "POST" })
@@ -182,8 +248,35 @@ export const generateSignal = createServerFn({ method: "POST" })
     const wantedDirection = bull > bear ? "BUY" : "SELL";
     const liveAligned = wantedDirection === "BUY" ? liveBody > 0 && momentum > 0 : liveBody < 0 && momentum < 0;
     const htfAligned = wantedDirection === "BUY" ? htfTrendUp : !htfTrendUp;
-    const direction: "BUY" | "SELL" | "WAIT" =
+    let ai = { direction: "WAIT" as Direction, confidence: 0, reason: "AI not checked" };
+    if (isLive && spreadOk && liveBias >= 0.25) {
+      try {
+        ai = await askAiForSignal({
+          pair: data.pair,
+          timeframe: data.timeframe,
+          price: lastPrice,
+          closes,
+          htfCloses,
+          rsi: r,
+          sma20,
+          sma50,
+          ema9,
+          ema21,
+          macdHist: m.hist,
+          momentum,
+          liveBody,
+          liveBias,
+          htfTrendUp,
+          spreadOk,
+        });
+      } catch {
+        ai = { direction: "WAIT", confidence: 0, reason: "AI filter unavailable" };
+      }
+    }
+
+    const direction: Direction =
       isLive && spreadOk && htfAligned && liveAligned && liveBias >= 0.35 && agreement >= 0.82
+        && ai.direction === wantedDirection && ai.confidence >= 70
         ? wantedDirection
         : "WAIT";
     const waitReason = !isLive
@@ -198,12 +291,16 @@ export const generateSignal = createServerFn({ method: "POST" })
       ? "WEAK LIVE PRESSURE"
       : agreement < 0.82
       ? "LOW CONFLUENCE"
+      : ai.direction !== wantedDirection
+      ? `AI SAYS ${ai.direction}`
+      : ai.confidence < 70
+      ? "AI CONFIDENCE LOW"
       : "NO TRADE";
 
     // Confidence scaled from agreement (82% → 80 conf, 100% → 98 conf)
     const confidence = direction === "WAIT"
       ? Math.round(Math.min(79, agreement * 100))
-      : Math.min(98, Math.round(80 + (agreement - 0.82) * 100));
+      : Math.min(98, Math.round((Math.min(98, 80 + (agreement - 0.82) * 100) + ai.confidence) / 2));
 
     const expirySeconds = TF_SECONDS[data.timeframe];
 
@@ -225,6 +322,9 @@ export const generateSignal = createServerFn({ method: "POST" })
       isLive,
       marketStatus: isLive ? "LIVE" : "MARKET CLOSED",
       waitReason: direction === "WAIT" ? waitReason : "LIVE CONFIRMED",
+      aiDirection: ai.direction,
+      aiConfidence: ai.confidence,
+      aiReason: ai.reason,
       livePressure: Math.round(liveBias * 100),
       marketTime: quote.time || latestCandleTime,
     };

@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { generateSignal, getPairs } from "@/lib/signal.functions";
 import { Sparkline } from "@/components/Sparkline";
 
@@ -37,6 +37,17 @@ function Index() {
   const [error, setError] = useState<string | null>(null);
   const [remaining, setRemaining] = useState(0);
   const [history, setHistory] = useState<Signal[]>([]);
+  const [autoScan, setAutoScan] = useState(false);
+  const [banner, setBanner] = useState<{ title: string; body: string; tone: "signal" | "wait" } | null>(null);
+  const scanningRef = useRef(false);
+
+  useEffect(() => {
+    setAutoScan(localStorage.getItem("jb_auto_scan") === "1");
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem("jb_auto_scan", autoScan ? "1" : "0");
+  }, [autoScan]);
 
   useEffect(() => {
     if (!signal) return;
@@ -49,10 +60,12 @@ function Index() {
     return () => clearInterval(id);
   }, [signal]);
 
-  async function onGenerate() {
-    setLoading(true); setError(null);
+  const onGenerate = useCallback(async (silent = false) => {
+    if (scanningRef.current) return;
+    scanningRef.current = true;
+    if (!silent) setLoading(true);
+    setError(null);
     try {
-      // Request notification permission on first generate (mobile-friendly PWA UX)
       if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "default") {
         try { await Notification.requestPermission(); } catch { /* ignore */ }
       }
@@ -61,25 +74,41 @@ function Index() {
       setSignal(s);
       setHistory((h) => [s, ...h].slice(0, 8));
 
-      // Vibrate + notify on confirmed signals only
+      const title = s.direction === "WAIT" ? "NO TRADE" : `${s.direction} ${s.pair}`;
+      const body = s.direction === "WAIT"
+        ? `${s.waitReason} • AI ${s.aiDirection} ${s.aiConfidence}%`
+        : `AI confirmed ${s.confidence}% • ${s.timeframe}`;
+      setBanner({ title, body, tone: s.direction === "WAIT" ? "wait" : "signal" });
+      window.setTimeout(() => setBanner(null), 6500);
+
       if (s.direction !== "WAIT") {
         if (typeof navigator !== "undefined" && "vibrate" in navigator) {
-          navigator.vibrate?.([120, 60, 120]);
+          navigator.vibrate?.([160, 70, 160, 70, 220]);
         }
         if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
           new Notification(`${s.direction} ${s.pair}`, {
-            body: `Confidence ${s.confidence}% • ${s.timeframe}`,
+            body: `AI confirmed ${s.confidence}% • ${s.timeframe}`,
             icon: "/favicon.png",
             tag: "jb-signal",
           });
         }
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to generate signal");
+      const message = e instanceof Error ? e.message : "Failed to generate signal";
+      setError(message);
+      if (!silent) setBanner({ title: "SCAN FAILED", body: message, tone: "wait" });
     } finally {
-      setLoading(false);
+      scanningRef.current = false;
+      if (!silent) setLoading(false);
     }
-  }
+  }, [gen, pair, timeframe]);
+
+  useEffect(() => {
+    if (!autoScan) return;
+    onGenerate(true);
+    const id = window.setInterval(() => onGenerate(true), 20_000);
+    return () => window.clearInterval(id);
+  }, [autoScan, onGenerate]);
 
   const mmss = useMemo(() => {
     const m = Math.floor(remaining / 60).toString().padStart(2, "0");
@@ -89,6 +118,18 @@ function Index() {
 
   return (
     <div className="min-h-screen px-4 py-8 md:py-12 max-w-3xl mx-auto">
+      {banner && (
+        <div className={`fixed left-4 right-4 top-4 z-50 mx-auto max-w-md rounded-xl border px-4 py-3 shadow-2xl backdrop-blur-md ${banner.tone === "signal" ? "neon-border bg-card/95" : "border-border bg-card/90"}`}>
+          <div className="flex items-center gap-3">
+            <span className={`h-3 w-3 rounded-full ${banner.tone === "signal" ? "bg-primary animate-pulse-neon" : "bg-muted-foreground"}`} />
+            <div className="min-w-0">
+              <div className="font-display text-sm font-bold tracking-widest text-primary">{banner.title}</div>
+              <div className="truncate text-xs text-muted-foreground">{banner.body}</div>
+            </div>
+          </div>
+        </div>
+      )}
+
       <header className="flex items-center justify-between mb-10">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-lg neon-border flex items-center justify-center font-display font-bold text-primary">侍</div>
@@ -134,11 +175,18 @@ function Index() {
         </div>
 
         <button
-          onClick={onGenerate}
+          onClick={() => onGenerate(false)}
           disabled={loading}
           className="w-full py-4 rounded-xl bg-primary text-primary-foreground font-display font-bold tracking-[0.3em] text-lg neon-glow disabled:opacity-50 transition-transform active:scale-[0.98]"
         >
           {loading ? "ANALYZING…" : "GENERATE SIGNAL"}
+        </button>
+
+        <button
+          onClick={() => setAutoScan((v) => !v)}
+          className={`w-full py-3 rounded-xl border font-display font-bold tracking-[0.22em] text-sm transition-all ${autoScan ? "bg-primary text-primary-foreground neon-glow border-primary" : "bg-secondary text-secondary-foreground border-border hover:bg-accent"}`}
+        >
+          {autoScan ? "AUTO SCAN ON" : "AUTO SCAN OFF"}
         </button>
 
         {error && (
@@ -186,9 +234,13 @@ function Index() {
             <Stat label="PRICE" value={signal.price.toFixed(5)} />
             <Stat label="MARKET" value={signal.marketStatus} />
             <Stat label="PRESSURE" value={`${signal.livePressure}%`} />
+            <Stat label="AI" value={`${signal.aiDirection} ${signal.aiConfidence}%`} />
             <Stat label="RSI" value={signal.rsi.toString()} />
             <Stat label="SMA 20" value={signal.sma20.toFixed(5)} />
             <Stat label="EMA 9" value={signal.ema9.toFixed(5)} />
+          </div>
+          <div className="mt-3 rounded-lg bg-secondary/40 px-3 py-2 text-xs text-muted-foreground">
+            AI CHECK: {signal.aiReason}
           </div>
         </div>
       )}
