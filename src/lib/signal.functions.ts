@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 
 type Candle = { datetime: string; open: string; high: string; low: string; close: string };
+type Quote = { close?: string; bid?: string; ask?: string; datetime?: string; timestamp?: number; status?: string; message?: string };
 
 const PAIRS = [
   "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD", "USD/CHF", "NZD/USD",
@@ -14,6 +15,19 @@ const HTF: Record<string, string> = {
   "15min": "1h",
   "30min": "2h",
 };
+
+const TF_SECONDS: Record<string, number> = { "1min": 60, "5min": 300, "15min": 900, "30min": 1800 };
+
+function parseMarketTime(value?: string, timestamp?: number) {
+  if (timestamp && Number.isFinite(timestamp)) return timestamp * 1000;
+  if (!value) return 0;
+  return Date.parse(`${value.replace(" ", "T")}Z`);
+}
+
+function median(values: number[]) {
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)] ?? 0;
+}
 
 function rsi(closes: number[], period = 14): number {
   if (closes.length < period + 1) return 50;
@@ -59,13 +73,28 @@ function macd(values: number[]) {
 }
 
 async function fetchSeries(pair: string, interval: string, size: number, key: string) {
-  const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(pair)}&interval=${interval}&outputsize=${size}&apikey=${key}`;
+  const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(pair)}&interval=${interval}&outputsize=${size}&timezone=UTC&apikey=${key}`;
   const res = await fetch(url);
   const json: { values?: Candle[]; status?: string; message?: string } = await res.json().catch(() => ({}));
   if (!res.ok || json.status === "error" || !json.values) {
     throw new Error(json.message || `Market data error (HTTP ${res.status})`);
   }
   return [...json.values].reverse();
+}
+
+async function fetchQuote(pair: string, key: string) {
+  const url = `https://api.twelvedata.com/quote?symbol=${encodeURIComponent(pair)}&apikey=${key}`;
+  const res = await fetch(url);
+  const json: Quote = await res.json().catch(() => ({}));
+  if (!res.ok || json.status === "error") throw new Error(json.message || `Live quote error (HTTP ${res.status})`);
+
+  const bid = json.bid ? parseFloat(json.bid) : NaN;
+  const ask = json.ask ? parseFloat(json.ask) : NaN;
+  const close = json.close ? parseFloat(json.close) : NaN;
+  const price = Number.isFinite(bid) && Number.isFinite(ask) ? (bid + ask) / 2 : close;
+  if (!Number.isFinite(price)) throw new Error("Live quote unavailable");
+
+  return { price, bid, ask, time: parseMarketTime(json.datetime, json.timestamp) };
 }
 
 export const getPairs = createServerFn({ method: "GET" }).handler(async () => PAIRS);
