@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { generateSignal, getPairs } from "@/lib/signal.functions";
 import { Sparkline } from "@/components/Sparkline";
 
@@ -37,6 +37,9 @@ function Index() {
   const [error, setError] = useState<string | null>(null);
   const [remaining, setRemaining] = useState(0);
   const [history, setHistory] = useState<Signal[]>([]);
+  const [autoScan, setAutoScan] = useState(false);
+  const [banner, setBanner] = useState<{ title: string; body: string; tone: "signal" | "wait" } | null>(null);
+  const scanningRef = useRef(false);
 
   useEffect(() => {
     if (!signal) return;
