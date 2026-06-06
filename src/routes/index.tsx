@@ -110,6 +110,18 @@ function Index() {
 
   return (
     <div className="min-h-screen px-4 py-8 md:py-12 max-w-3xl mx-auto">
+      {banner && (
+        <div className={`fixed left-4 right-4 top-4 z-50 mx-auto max-w-md rounded-xl border px-4 py-3 shadow-2xl backdrop-blur-md ${banner.tone === "signal" ? "neon-border bg-card/95" : "border-border bg-card/90"}`}>
+          <div className="flex items-center gap-3">
+            <span className={`h-3 w-3 rounded-full ${banner.tone === "signal" ? "bg-primary animate-pulse-neon" : "bg-muted-foreground"}`} />
+            <div className="min-w-0">
+              <div className="font-display text-sm font-bold tracking-widest text-primary">{banner.title}</div>
+              <div className="truncate text-xs text-muted-foreground">{banner.body}</div>
+            </div>
+          </div>
+        </div>
+      )}
+
       <header className="flex items-center justify-between mb-10">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-lg neon-border flex items-center justify-center font-display font-bold text-primary">侍</div>
@@ -155,11 +167,18 @@ function Index() {
         </div>
 
         <button
-          onClick={onGenerate}
+          onClick={() => onGenerate(false)}
           disabled={loading}
           className="w-full py-4 rounded-xl bg-primary text-primary-foreground font-display font-bold tracking-[0.3em] text-lg neon-glow disabled:opacity-50 transition-transform active:scale-[0.98]"
         >
           {loading ? "ANALYZING…" : "GENERATE SIGNAL"}
+        </button>
+
+        <button
+          onClick={() => setAutoScan((v) => !v)}
+          className={`w-full py-3 rounded-xl border font-display font-bold tracking-[0.22em] text-sm transition-all ${autoScan ? "bg-primary text-primary-foreground neon-glow border-primary" : "bg-secondary text-secondary-foreground border-border hover:bg-accent"}`}
+        >
+          {autoScan ? "AUTO SCAN ON" : "AUTO SCAN OFF"}
         </button>
 
         {error && (
@@ -207,9 +226,13 @@ function Index() {
             <Stat label="PRICE" value={signal.price.toFixed(5)} />
             <Stat label="MARKET" value={signal.marketStatus} />
             <Stat label="PRESSURE" value={`${signal.livePressure}%`} />
+            <Stat label="AI" value={`${signal.aiDirection} ${signal.aiConfidence}%`} />
             <Stat label="RSI" value={signal.rsi.toString()} />
             <Stat label="SMA 20" value={signal.sma20.toFixed(5)} />
             <Stat label="EMA 9" value={signal.ema9.toFixed(5)} />
+          </div>
+          <div className="mt-3 rounded-lg bg-secondary/40 px-3 py-2 text-xs text-muted-foreground">
+            AI CHECK: {signal.aiReason}
           </div>
         </div>
       )}
