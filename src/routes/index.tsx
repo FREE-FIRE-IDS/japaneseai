@@ -42,6 +42,14 @@ function Index() {
   const scanningRef = useRef(false);
 
   useEffect(() => {
+    setAutoScan(localStorage.getItem("jb_auto_scan") === "1");
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem("jb_auto_scan", autoScan ? "1" : "0");
+  }, [autoScan]);
+
+  useEffect(() => {
     if (!signal) return;
     const tick = () => {
       const elapsed = Math.floor((Date.now() - signal.generatedAt) / 1000);
