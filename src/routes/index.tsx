@@ -53,6 +53,8 @@ function Index() {
     setLoading(true); setError(null);
     try {
       const s = await gen({ data: { pair, timeframe } });
+      // Use client time so countdown matches exactly the selected timeframe (no +1 min drift)
+      s.generatedAt = Date.now();
       setSignal(s);
       setHistory((h) => [s, ...h].slice(0, 8));
     } catch (e) {
