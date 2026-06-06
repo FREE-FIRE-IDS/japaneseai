@@ -6,6 +6,7 @@ import { createLovableAiGatewayProvider } from "@/lib/ai-gateway.server";
 type Candle = { datetime: string; open: string; high: string; low: string; close: string };
 type Quote = { close?: string; bid?: string; ask?: string; datetime?: string; timestamp?: number; status?: string; message?: string };
 type Direction = "BUY" | "SELL" | "WAIT";
+type LiveQuote = { price: number; bid: number; ask: number; time: number };
 
 const PAIRS = [
   "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD", "USD/CHF", "NZD/USD",
@@ -21,6 +22,14 @@ const HTF: Record<string, string> = {
 };
 
 const TF_SECONDS: Record<string, number> = { "1min": 60, "5min": 300, "15min": 900, "30min": 1800 };
+const ALPHA_INTERVALS: Record<string, string> = {
+  "1min": "1min",
+  "5min": "5min",
+  "15min": "15min",
+  "30min": "30min",
+  "1h": "60min",
+  "2h": "60min",
+};
 
 function parseMarketTime(value?: string, timestamp?: number) {
   if (timestamp && Number.isFinite(timestamp)) return timestamp * 1000;
@@ -101,6 +110,67 @@ async function fetchQuote(pair: string, key: string) {
   return { price, bid, ask, time: parseMarketTime(json.datetime, json.timestamp) };
 }
 
+function splitForexPair(pair: string) {
+  const [from, to] = pair.split("/");
+  if (!from || !to) throw new Error("Invalid forex pair");
+  return { from, to };
+}
+
+async function fetchAlphaSeries(pair: string, interval: string, size: number, key: string) {
+  const { from, to } = splitForexPair(pair);
+  const alphaInterval = ALPHA_INTERVALS[interval] ?? "60min";
+  const url = `https://www.alphavantage.co/query?function=FX_INTRADAY&from_symbol=${encodeURIComponent(from)}&to_symbol=${encodeURIComponent(to)}&interval=${alphaInterval}&outputsize=compact&apikey=${key}`;
+  const res = await fetch(url);
+  const json: Record<string, unknown> = await res.json().catch(() => ({}));
+  const apiMessage = json["Error Message"] || json.Information || json.Note;
+  const seriesKey = `Time Series FX (${alphaInterval})`;
+  const series = json[seriesKey] as Record<string, Record<string, string>> | undefined;
+  if (!res.ok || apiMessage || !series) {
+    throw new Error(typeof apiMessage === "string" ? apiMessage : `Fallback market data error (HTTP ${res.status})`);
+  }
+
+  return Object.entries(series)
+    .map(([datetime, value]) => ({
+      datetime,
+      open: value["1. open"],
+      high: value["2. high"],
+      low: value["3. low"],
+      close: value["4. close"],
+    }))
+    .filter((c) => Number.isFinite(parseFloat(c.close)))
+    .sort((a, b) => parseMarketTime(a.datetime) - parseMarketTime(b.datetime))
+    .slice(-size);
+}
+
+async function fetchMarketData(pair: string, timeframe: string, twelveKey: string, alphaKey?: string) {
+  try {
+    const [ltf, htf, quote] = await Promise.all([
+      fetchSeries(pair, timeframe, 100, twelveKey),
+      fetchSeries(pair, HTF[timeframe], 60, twelveKey),
+      fetchQuote(pair, twelveKey),
+    ]);
+    return { ltf, htf, quote };
+  } catch (primaryError) {
+    if (!alphaKey) throw primaryError;
+
+    const [ltf, htf] = await Promise.all([
+      fetchAlphaSeries(pair, timeframe, 100, alphaKey),
+      fetchAlphaSeries(pair, HTF[timeframe], 60, alphaKey),
+    ]);
+    const latest = ltf[ltf.length - 1];
+    const price = parseFloat(latest?.close ?? "NaN");
+    if (!latest || !Number.isFinite(price)) throw primaryError;
+
+    const quote: LiveQuote = {
+      price,
+      bid: Number.NaN,
+      ask: Number.NaN,
+      time: parseMarketTime(latest.datetime),
+    };
+    return { ltf, htf, quote };
+  }
+}
+
 const AiSignalSchema = z.object({
   direction: z.enum(["BUY", "SELL", "WAIT"]),
   confidence: z.number(),
@@ -173,14 +243,12 @@ export const generateSignal = createServerFn({ method: "POST" })
   })
   .handler(async ({ data }) => {
     const key = process.env.TWELVE_DATA_API_KEY;
+    const alphaKey = process.env.ALPHA_VANTAGE_API_KEY || "HUO12PIJ5DFCNFPT";
     if (!key) throw new Error("API key not configured");
 
     // Pull execution candles, higher-timeframe trend, and the latest live quote together.
-    const [ltf, htf, quote] = await Promise.all([
-      fetchSeries(data.pair, data.timeframe, 100, key),
-      fetchSeries(data.pair, HTF[data.timeframe], 60, key),
-      fetchQuote(data.pair, key),
-    ]);
+    // If the primary feed is limited/offline, silently switch to Alpha Vantage.
+    const { ltf, htf, quote } = await fetchMarketData(data.pair, data.timeframe, key, alphaKey);
 
     const latestCandle = ltf[ltf.length - 1];
     const latestCandleTime = parseMarketTime(latestCandle?.datetime);
@@ -295,7 +363,7 @@ export const generateSignal = createServerFn({ method: "POST" })
       ? `AI SAYS ${ai.direction}`
       : ai.confidence < 70
       ? "AI CONFIDENCE LOW"
-      : "NO TRADE";
+      : "WAITING FOR CLEAN ENTRY";
 
     // Confidence scaled from agreement (82% → 80 conf, 100% → 98 conf)
     const confidence = direction === "WAIT"

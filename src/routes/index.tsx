@@ -74,7 +74,7 @@ function Index() {
       setSignal(s);
       setHistory((h) => [s, ...h].slice(0, 8));
 
-      const title = s.direction === "WAIT" ? "NO TRADE" : `${s.direction} ${s.pair}`;
+      const title = s.direction === "WAIT" ? "MARKET SCAN" : `${s.direction} ${s.pair}`;
       const body = s.direction === "WAIT"
         ? `${s.waitReason} • AI ${s.aiDirection} ${s.aiConfidence}%`
         : `AI confirmed ${s.confidence}% • ${s.timeframe}`;
@@ -221,8 +221,8 @@ function Index() {
               color: signal.direction === "WAIT" ? "#eee" : "#0a0a0a",
             }}
           >
-            <div className="text-xs tracking-[0.4em] opacity-70">{signal.direction === "WAIT" ? "NO TRADE" : "DIRECTION"}</div>
-            <div className="font-display text-5xl md:text-6xl font-black tracking-widest">{signal.direction}</div>
+            <div className="text-xs tracking-[0.4em] opacity-70">{signal.direction === "WAIT" ? "SCANNING" : "DIRECTION"}</div>
+            <div className="font-display text-5xl md:text-6xl font-black tracking-widest">{signal.direction === "WAIT" ? "WAIT" : signal.direction}</div>
             <div className="text-sm mt-2 tracking-wider opacity-80">
               {signal.direction === "WAIT" ? `${signal.waitReason} — wait` : `Confidence ${signal.confidence}% • LIVE ✓ • HTF ${signal.htfAligned ? "✓ aligned" : "× mixed"}`}
             </div>
