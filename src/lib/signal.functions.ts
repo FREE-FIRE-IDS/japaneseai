@@ -1,7 +1,11 @@
 import { createServerFn } from "@tanstack/react-start";
+import { generateText, Output } from "ai";
+import { z } from "zod";
+import { createLovableAiGatewayProvider } from "@/lib/ai-gateway.server";
 
 type Candle = { datetime: string; open: string; high: string; low: string; close: string };
 type Quote = { close?: string; bid?: string; ask?: string; datetime?: string; timestamp?: number; status?: string; message?: string };
+type Direction = "BUY" | "SELL" | "WAIT";
 
 const PAIRS = [
   "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD", "USD/CHF", "NZD/USD",
