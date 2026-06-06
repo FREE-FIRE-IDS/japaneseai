@@ -176,7 +176,7 @@ function Index() {
             <div className="text-xs tracking-[0.4em] opacity-70">{signal.direction === "WAIT" ? "NO TRADE" : "DIRECTION"}</div>
             <div className="font-display text-5xl md:text-6xl font-black tracking-widest">{signal.direction}</div>
             <div className="text-sm mt-2 tracking-wider opacity-80">
-              {signal.direction === "WAIT" ? `Low confluence ${signal.confidence}% — wait for setup` : `Confidence ${signal.confidence}% • HTF ${signal.htfAligned ? "✓ aligned" : "× mixed"}`}
+              {signal.direction === "WAIT" ? `${signal.waitReason} — wait` : `Confidence ${signal.confidence}% • LIVE ✓ • HTF ${signal.htfAligned ? "✓ aligned" : "× mixed"}`}
             </div>
           </div>
 
@@ -184,6 +184,8 @@ function Index() {
 
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-5 text-sm">
             <Stat label="PRICE" value={signal.price.toFixed(5)} />
+            <Stat label="MARKET" value={signal.marketStatus} />
+            <Stat label="PRESSURE" value={`${signal.livePressure}%`} />
             <Stat label="RSI" value={signal.rsi.toString()} />
             <Stat label="SMA 20" value={signal.sma20.toFixed(5)} />
             <Stat label="EMA 9" value={signal.ema9.toFixed(5)} />
@@ -199,7 +201,7 @@ function Index() {
             {history.slice(1).map((s, i) => (
               <div key={i} className="bg-card/60 border border-border rounded-lg px-4 py-3 flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  <span className={`font-display font-bold text-sm px-2 py-1 rounded ${s.direction === "BUY" ? "text-buy" : "text-sell"}`} style={{ background: s.direction === "BUY" ? "color-mix(in oklab, var(--buy) 15%, transparent)" : "color-mix(in oklab, var(--sell) 15%, transparent)" }}>
+                  <span className={`font-display font-bold text-sm px-2 py-1 rounded ${s.direction === "BUY" ? "text-buy" : s.direction === "SELL" ? "text-sell" : "text-muted-foreground"}`} style={{ background: s.direction === "BUY" ? "color-mix(in oklab, var(--buy) 15%, transparent)" : s.direction === "SELL" ? "color-mix(in oklab, var(--sell) 15%, transparent)" : "color-mix(in oklab, var(--muted-foreground) 14%, transparent)" }}>
                     {s.direction}
                   </span>
                   <span className="font-display tracking-wider text-sm">{s.pair}</span>
