@@ -248,8 +248,35 @@ export const generateSignal = createServerFn({ method: "POST" })
     const wantedDirection = bull > bear ? "BUY" : "SELL";
     const liveAligned = wantedDirection === "BUY" ? liveBody > 0 && momentum > 0 : liveBody < 0 && momentum < 0;
     const htfAligned = wantedDirection === "BUY" ? htfTrendUp : !htfTrendUp;
-    const direction: "BUY" | "SELL" | "WAIT" =
+    let ai = { direction: "WAIT" as Direction, confidence: 0, reason: "AI not checked" };
+    if (isLive && spreadOk && liveBias >= 0.25) {
+      try {
+        ai = await askAiForSignal({
+          pair: data.pair,
+          timeframe: data.timeframe,
+          price: lastPrice,
+          closes,
+          htfCloses,
+          rsi: r,
+          sma20,
+          sma50,
+          ema9,
+          ema21,
+          macdHist: m.hist,
+          momentum,
+          liveBody,
+          liveBias,
+          htfTrendUp,
+          spreadOk,
+        });
+      } catch {
+        ai = { direction: "WAIT", confidence: 0, reason: "AI filter unavailable" };
+      }
+    }
+
+    const direction: Direction =
       isLive && spreadOk && htfAligned && liveAligned && liveBias >= 0.35 && agreement >= 0.82
+        && ai.direction === wantedDirection && ai.confidence >= 70
         ? wantedDirection
         : "WAIT";
     const waitReason = !isLive
@@ -264,12 +291,16 @@ export const generateSignal = createServerFn({ method: "POST" })
       ? "WEAK LIVE PRESSURE"
       : agreement < 0.82
       ? "LOW CONFLUENCE"
+      : ai.direction !== wantedDirection
+      ? `AI SAYS ${ai.direction}`
+      : ai.confidence < 70
+      ? "AI CONFIDENCE LOW"
       : "NO TRADE";
 
     // Confidence scaled from agreement (82% → 80 conf, 100% → 98 conf)
     const confidence = direction === "WAIT"
       ? Math.round(Math.min(79, agreement * 100))
-      : Math.min(98, Math.round(80 + (agreement - 0.82) * 100));
+      : Math.min(98, Math.round((Math.min(98, 80 + (agreement - 0.82) * 100) + ai.confidence) / 2));
 
     const expirySeconds = TF_SECONDS[data.timeframe];
 
@@ -291,6 +322,9 @@ export const generateSignal = createServerFn({ method: "POST" })
       isLive,
       marketStatus: isLive ? "LIVE" : "MARKET CLOSED",
       waitReason: direction === "WAIT" ? waitReason : "LIVE CONFIRMED",
+      aiDirection: ai.direction,
+      aiConfidence: ai.confidence,
+      aiReason: ai.reason,
       livePressure: Math.round(liveBias * 100),
       marketTime: quote.time || latestCandleTime,
     };
