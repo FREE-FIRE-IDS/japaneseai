@@ -54,10 +54,10 @@ export const generateSignal = createServerFn({ method: "POST" })
 
     const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(data.pair)}&interval=${data.timeframe}&outputsize=60&apikey=${key}`;
     const res = await fetch(url);
-    if (!res.ok) throw new Error("Market data fetch failed");
-    const json: { values?: Candle[]; status?: string; message?: string; code?: number } = await res.json();
-    if (json.status === "error" || !json.values) {
-      throw new Error(json.message || "Market data unavailable");
+    const json: { values?: Candle[]; status?: string; message?: string; code?: number } = await res.json().catch(() => ({}));
+    console.log("[TwelveData]", res.status, JSON.stringify(json).slice(0, 300));
+    if (!res.ok || json.status === "error" || !json.values) {
+      throw new Error(json.message || `Twelve Data error (HTTP ${res.status})`);
     }
 
     // Twelve Data returns newest first — reverse for chronological order
