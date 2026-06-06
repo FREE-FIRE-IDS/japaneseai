@@ -52,10 +52,12 @@ function Index() {
     return () => clearInterval(id);
   }, [signal]);
 
-  async function onGenerate() {
-    setLoading(true); setError(null);
+  const onGenerate = useCallback(async (silent = false) => {
+    if (scanningRef.current) return;
+    scanningRef.current = true;
+    if (!silent) setLoading(true);
+    setError(null);
     try {
-      // Request notification permission on first generate (mobile-friendly PWA UX)
       if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "default") {
         try { await Notification.requestPermission(); } catch { /* ignore */ }
       }
@@ -64,25 +66,41 @@ function Index() {
       setSignal(s);
       setHistory((h) => [s, ...h].slice(0, 8));
 
-      // Vibrate + notify on confirmed signals only
+      const title = s.direction === "WAIT" ? "NO TRADE" : `${s.direction} ${s.pair}`;
+      const body = s.direction === "WAIT"
+        ? `${s.waitReason} • AI ${s.aiDirection} ${s.aiConfidence}%`
+        : `AI confirmed ${s.confidence}% • ${s.timeframe}`;
+      setBanner({ title, body, tone: s.direction === "WAIT" ? "wait" : "signal" });
+      window.setTimeout(() => setBanner(null), 6500);
+
       if (s.direction !== "WAIT") {
         if (typeof navigator !== "undefined" && "vibrate" in navigator) {
-          navigator.vibrate?.([120, 60, 120]);
+          navigator.vibrate?.([160, 70, 160, 70, 220]);
         }
         if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
           new Notification(`${s.direction} ${s.pair}`, {
-            body: `Confidence ${s.confidence}% • ${s.timeframe}`,
+            body: `AI confirmed ${s.confidence}% • ${s.timeframe}`,
             icon: "/favicon.png",
             tag: "jb-signal",
           });
         }
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to generate signal");
+      const message = e instanceof Error ? e.message : "Failed to generate signal";
+      setError(message);
+      if (!silent) setBanner({ title: "SCAN FAILED", body: message, tone: "wait" });
     } finally {
-      setLoading(false);
+      scanningRef.current = false;
+      if (!silent) setLoading(false);
     }
-  }
+  }, [gen, pair, timeframe]);
+
+  useEffect(() => {
+    if (!autoScan) return;
+    onGenerate(true);
+    const id = window.setInterval(() => onGenerate(true), 20_000);
+    return () => window.clearInterval(id);
+  }, [autoScan, onGenerate]);
 
   const mmss = useMemo(() => {
     const m = Math.floor(remaining / 60).toString().padStart(2, "0");
