@@ -7,6 +7,14 @@ const PAIRS = [
   "EUR/JPY", "GBP/JPY", "EUR/GBP", "AUD/JPY", "EUR/AUD", "GBP/CAD", "CHF/JPY",
 ];
 
+// Higher timeframe used for trend confirmation
+const HTF: Record<string, string> = {
+  "1min": "5min",
+  "5min": "15min",
+  "15min": "1h",
+  "30min": "2h",
+};
+
 function rsi(closes: number[], period = 14): number {
   if (closes.length < period + 1) return 50;
   let gains = 0, losses = 0;
@@ -33,11 +41,31 @@ function sma(values: number[], period: number): number {
   return slice.reduce((a, b) => a + b, 0) / slice.length;
 }
 
-function ema(values: number[], period: number): number {
+function emaSeries(values: number[], period: number): number[] {
   const k = 2 / (period + 1);
-  let e = values[0];
-  for (let i = 1; i < values.length; i++) e = values[i] * k + e * (1 - k);
-  return e;
+  const out: number[] = [values[0]];
+  for (let i = 1; i < values.length; i++) out.push(values[i] * k + out[i - 1] * (1 - k));
+  return out;
+}
+
+function macd(values: number[]) {
+  const e12 = emaSeries(values, 12);
+  const e26 = emaSeries(values, 26);
+  const macdLine = values.map((_, i) => e12[i] - e26[i]);
+  const signalLine = emaSeries(macdLine.slice(-Math.min(values.length, 35)), 9);
+  const m = macdLine[macdLine.length - 1];
+  const s = signalLine[signalLine.length - 1];
+  return { macd: m, signal: s, hist: m - s };
+}
+
+async function fetchSeries(pair: string, interval: string, size: number, key: string) {
+  const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(pair)}&interval=${interval}&outputsize=${size}&apikey=${key}`;
+  const res = await fetch(url);
+  const json: { values?: Candle[]; status?: string; message?: string } = await res.json().catch(() => ({}));
+  if (!res.ok || json.status === "error" || !json.values) {
+    throw new Error(json.message || `Market data error (HTTP ${res.status})`);
+  }
+  return [...json.values].reverse();
 }
 
 export const getPairs = createServerFn({ method: "GET" }).handler(async () => PAIRS);
@@ -52,36 +80,65 @@ export const generateSignal = createServerFn({ method: "POST" })
     const key = process.env.TWELVE_DATA_API_KEY;
     if (!key) throw new Error("API key not configured");
 
-    const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(data.pair)}&interval=${data.timeframe}&outputsize=60&apikey=${key}`;
-    const res = await fetch(url);
-    const json: { values?: Candle[]; status?: string; message?: string; code?: number } = await res.json().catch(() => ({}));
-    console.log("[TwelveData]", res.status, JSON.stringify(json).slice(0, 300));
-    if (!res.ok || json.status === "error" || !json.values) {
-      throw new Error(json.message || `Twelve Data error (HTTP ${res.status})`);
-    }
+    // Pull both the execution timeframe and a higher timeframe for trend confluence
+    const [ltf, htf] = await Promise.all([
+      fetchSeries(data.pair, data.timeframe, 100, key),
+      fetchSeries(data.pair, HTF[data.timeframe], 60, key),
+    ]);
 
-    // Twelve Data returns newest first — reverse for chronological order
-    const candles = [...json.values].reverse();
-    const closes = candles.map((c) => parseFloat(c.close));
+    const closes = ltf.map((c) => parseFloat(c.close));
+    const htfCloses = htf.map((c) => parseFloat(c.close));
+
     const lastPrice = closes[closes.length - 1];
     const prevPrice = closes[closes.length - 2] ?? lastPrice;
 
     const r = rsi(closes, 14);
     const sma20 = sma(closes, Math.min(20, closes.length));
-    const ema9 = ema(closes.slice(-15), 9);
-    const momentum = ((lastPrice - prevPrice) / prevPrice) * 10000; // pips-ish
+    const sma50 = sma(closes, Math.min(50, closes.length));
+    const ema9Series = emaSeries(closes, 9);
+    const ema21Series = emaSeries(closes, 21);
+    const ema9 = ema9Series[ema9Series.length - 1];
+    const ema21 = ema21Series[ema21Series.length - 1];
+    const ema9Prev = ema9Series[ema9Series.length - 2] ?? ema9;
+    const ema21Prev = ema21Series[ema21Series.length - 2] ?? ema21;
 
-    // Score: combine RSI, trend (price vs SMA), EMA cross, momentum
-    let score = 0;
-    if (r < 30) score += 2; else if (r > 70) score -= 2;
-    else if (r < 45) score += 1; else if (r > 55) score -= 1;
-    if (lastPrice > sma20) score += 1; else score -= 1;
-    if (ema9 > sma20) score += 1; else score -= 1;
-    if (momentum > 0) score += 1; else if (momentum < 0) score -= 1;
+    const m = macd(closes);
+    const momentum = ((lastPrice - prevPrice) / prevPrice) * 10000;
 
-    const direction: "BUY" | "SELL" = score >= 0 ? "BUY" : "SELL";
-    const strength = Math.min(100, Math.round((Math.abs(score) / 5) * 100));
-    const confidence = 55 + Math.round(strength * 0.4); // 55–95%
+    // Higher timeframe trend
+    const htfEma = emaSeries(htfCloses, 21);
+    const htfTrendUp = htfCloses[htfCloses.length - 1] > htfEma[htfEma.length - 1];
+
+    // Confluence scoring — each confirmed condition adds weight
+    let bull = 0, bear = 0;
+    // RSI zones
+    if (r < 30) bull += 2; else if (r < 45) bull += 1;
+    if (r > 70) bear += 2; else if (r > 55) bear += 1;
+    // Price vs SMAs
+    if (lastPrice > sma20) bull += 1; else bear += 1;
+    if (lastPrice > sma50) bull += 1; else bear += 1;
+    // EMA stack + cross
+    if (ema9 > ema21) bull += 1; else bear += 1;
+    if (ema9Prev <= ema21Prev && ema9 > ema21) bull += 2; // fresh bullish cross
+    if (ema9Prev >= ema21Prev && ema9 < ema21) bear += 2; // fresh bearish cross
+    // MACD
+    if (m.hist > 0) bull += 1; else bear += 1;
+    if (m.macd > m.signal) bull += 1; else bear += 1;
+    // Momentum
+    if (momentum > 0) bull += 1; else if (momentum < 0) bear += 1;
+    // HTF confluence (heavy weight — must align)
+    if (htfTrendUp) bull += 2; else bear += 2;
+
+    const total = bull + bear;
+    const dominant = Math.max(bull, bear);
+    const agreement = total === 0 ? 0 : dominant / total; // 0.5 - 1.0
+    const direction: "BUY" | "SELL" | "WAIT" =
+      agreement >= 0.72 ? (bull > bear ? "BUY" : "SELL") : "WAIT";
+
+    // Confidence scaled from agreement (72% → 75 conf, 100% → 98 conf)
+    const confidence = direction === "WAIT"
+      ? Math.round(agreement * 100)
+      : Math.min(98, Math.round(75 + (agreement - 0.72) * 82));
 
     const tfSeconds: Record<string, number> = { "1min": 60, "5min": 300, "15min": 900, "30min": 1800 };
     const expirySeconds = tfSeconds[data.timeframe];
@@ -91,7 +148,7 @@ export const generateSignal = createServerFn({ method: "POST" })
       timeframe: data.timeframe,
       direction,
       confidence,
-      strength,
+      strength: Math.round(agreement * 100),
       price: lastPrice,
       rsi: Math.round(r * 10) / 10,
       sma20: Math.round(sma20 * 100000) / 100000,
@@ -100,5 +157,6 @@ export const generateSignal = createServerFn({ method: "POST" })
       expirySeconds,
       generatedAt: Date.now(),
       sparkline: closes.slice(-30),
+      htfAligned: direction === "WAIT" ? false : (direction === "BUY" ? htfTrendUp : !htfTrendUp),
     };
   });
