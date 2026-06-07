@@ -8,9 +8,9 @@ export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
       { title: "JAPANESE BOT — Forex Signals" },
-      { name: "description", content: "Real-time forex BUY/SELL signals powered by live market data." },
+      { name: "description", content: "Real-time forex UP/DOWN signals powered by live market data." },
       { property: "og:title", content: "JAPANESE BOT" },
-      { property: "og:description", content: "Real-time forex BUY/SELL signals." },
+      { property: "og:description", content: "Real-time forex UP/DOWN signals." },
       { name: "theme-color", content: "#00ff88" },
     ],
   }),
