@@ -114,25 +114,52 @@ function Index() {
 
   useEffect(() => {
     if (typeof window === "undefined" || !("Notification" in window)) return;
-    const showOpenNotification = () => {
-      const notification = new Notification("JAPANESE BOT READY", {
-        body: "Tap to scan live market and get UP/DOWN signal",
-        icon: "/favicon.png",
-        tag: "jb-open-scan",
-      });
-      notification.onclick = () => {
-        window.focus();
-        onGenerate(false);
-      };
+
+    // Detect Lovable preview iframe — skip SW there
+    const inIframe = window.self !== window.top;
+    const host = window.location.hostname;
+    const isPreview = inIframe || host.startsWith("id-preview--") || host.startsWith("preview--") || host.endsWith(".lovableproject.com");
+
+    let swReg: ServiceWorkerRegistration | null = null;
+
+    const showPersistent = (title: string, body: string) => {
+      if (swReg) {
+        swReg.active?.postMessage({ type: "SHOW_NOTIFICATION", title, body, tag: "jb-scan-cta" });
+      } else {
+        const n = new Notification(title, { body, icon: "/favicon.png", tag: "jb-scan-cta" });
+        n.onclick = () => { window.focus(); onGenerate(false); };
+      }
     };
 
-    if (Notification.permission === "granted") showOpenNotification();
-    if (Notification.permission === "default") {
-      Notification.requestPermission().then((permission) => {
-        if (permission === "granted") showOpenNotification();
-      }).catch(() => undefined);
+    const init = async () => {
+      if (!isPreview && "serviceWorker" in navigator) {
+        try {
+          swReg = await navigator.serviceWorker.register("/sw-notify.js");
+          await navigator.serviceWorker.ready;
+        } catch { /* ignore */ }
+      }
+      const fire = () => showPersistent("JAPANESE BOT READY", "Open Quotex, pick OTC pair, then tap SCAN NOW");
+      if (Notification.permission === "granted") fire();
+      else if (Notification.permission === "default") {
+        const p = await Notification.requestPermission().catch(() => "denied" as NotificationPermission);
+        if (p === "granted") fire();
+      }
+    };
+    init();
+
+    const onMsg = (e: MessageEvent) => {
+      if (e.data?.type === "TRIGGER_SCAN") onGenerate(false);
+    };
+    navigator.serviceWorker?.addEventListener("message", onMsg);
+
+    // ?scan=1 deep link from notification click
+    if (new URLSearchParams(window.location.search).get("scan") === "1") {
+      onGenerate(false);
     }
+
+    return () => navigator.serviceWorker?.removeEventListener("message", onMsg);
   }, [onGenerate]);
+
 
   const mmss = useMemo(() => {
     const m = Math.floor(remaining / 60).toString().padStart(2, "0");
