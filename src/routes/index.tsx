@@ -27,6 +27,10 @@ const TIMEFRAMES = [
   { value: "30min", label: "30M" },
 ];
 
+function displayDirection(direction: "BUY" | "SELL") {
+  return direction === "BUY" ? "UP" : "DOWN";
+}
+
 function Index() {
   const { pairs } = Route.useLoaderData();
   const gen = useServerFn(generateSignal);
@@ -74,7 +78,8 @@ function Index() {
       setSignal(s);
       setHistory((h) => [s, ...h].slice(0, 8));
 
-      const title = `${s.direction} ${s.pair}`;
+      const directionLabel = displayDirection(s.direction);
+      const title = `${directionLabel} ${s.pair}`;
       const body = `Signal ${s.confidence}% • ${s.timeframe} • ${s.waitReason}`;
       setBanner({ title, body, tone: "signal" });
       window.setTimeout(() => setBanner(null), 6500);
@@ -83,7 +88,7 @@ function Index() {
         navigator.vibrate?.([160, 70, 160, 70, 220]);
       }
       if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
-        const notification = new Notification(`${s.direction} ${s.pair}`, {
+        const notification = new Notification(`${directionLabel} ${s.pair}`, {
           body: `Signal ${s.confidence}% • ${s.timeframe}`,
           icon: "/favicon.png",
           tag: "jb-signal",
@@ -239,7 +244,7 @@ function Index() {
             }}
           >
             <div className="text-xs tracking-[0.4em] opacity-70">DIRECTION</div>
-            <div className="font-display text-5xl md:text-6xl font-black tracking-widest">{signal.direction}</div>
+            <div className="font-display text-5xl md:text-6xl font-black tracking-widest">{displayDirection(signal.direction)}</div>
             <div className="text-sm mt-2 tracking-wider opacity-80">
               Confidence {signal.confidence}% • {signal.marketStatus} • HTF {signal.htfAligned ? "✓ aligned" : "× mixed"}
             </div>
@@ -271,7 +276,7 @@ function Index() {
               <div key={i} className="bg-card/60 border border-border rounded-lg px-4 py-3 flex items-center justify-between">
                 <div className="flex items-center gap-3">
                   <span className={`font-display font-bold text-sm px-2 py-1 rounded ${s.direction === "BUY" ? "text-buy" : "text-sell"}`} style={{ background: s.direction === "BUY" ? "color-mix(in oklab, var(--buy) 15%, transparent)" : "color-mix(in oklab, var(--sell) 15%, transparent)" }}>
-                    {s.direction}
+                    {displayDirection(s.direction)}
                   </span>
                   <span className="font-display tracking-wider text-sm">{s.pair}</span>
                   <span className="text-xs text-muted-foreground">{s.timeframe}</span>
