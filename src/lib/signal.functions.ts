@@ -172,7 +172,7 @@ async function fetchMarketData(pair: string, timeframe: string, twelveKey: strin
 }
 
 const AiSignalSchema = z.object({
-  direction: z.enum(["BUY", "SELL", "WAIT"]),
+  direction: z.enum(["BUY", "SELL"]),
   confidence: z.number(),
   reason: z.string(),
 });
@@ -194,15 +194,16 @@ async function askAiForSignal(input: {
   liveBias: number;
   htfTrendUp: boolean;
   spreadOk: boolean;
+  suggestedDirection: "BUY" | "SELL";
 }) {
   const key = process.env.LOVABLE_API_KEY;
-  if (!key) return { direction: "WAIT" as Direction, confidence: 0, reason: "AI unavailable" };
+  if (!key) return { direction: input.suggestedDirection as Direction, confidence: 55, reason: "Algorithmic live-data mode" };
 
   const gateway = createLovableAiGatewayProvider(key);
   const { output } = await generateText({
     model: gateway("google/gemini-3-flash-preview"),
     output: Output.object({ schema: AiSignalSchema }),
-    system: "You are a strict live forex signal risk filter. Never invent market data. Use only the supplied candles, quote, and indicators. Return WAIT unless live momentum, trend, and candle pressure are clearly aligned. No guaranteed-profit claims.",
+    system: "You are a strict live forex signal selector. Never invent market data. Use only the supplied candles, quote, and indicators. You must choose BUY or SELL only. No guaranteed-profit claims.",
     prompt: JSON.stringify({
       pair: input.pair,
       timeframe: input.timeframe,
@@ -222,7 +223,8 @@ async function askAiForSignal(input: {
         htfTrendUp: input.htfTrendUp,
         spreadOk: input.spreadOk,
       },
-      rule: "direction must be BUY, SELL, or WAIT. Use WAIT if uncertain, mixed, stale-looking, or weak pressure. confidence 0-98.",
+      suggestedDirection: input.suggestedDirection,
+      rule: "direction must be BUY or SELL only. If mixed, choose the stronger side from momentum, EMA/MACD, live candle pressure, and higher timeframe. confidence 50-98.",
     }),
   });
 
