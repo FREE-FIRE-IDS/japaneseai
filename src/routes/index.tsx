@@ -234,10 +234,8 @@ function Index() {
             style={{
               background: signal.direction === "BUY"
                 ? "linear-gradient(135deg, var(--buy), color-mix(in oklab, var(--buy) 60%, black))"
-                : signal.direction === "SELL"
-                ? "linear-gradient(135deg, var(--sell), color-mix(in oklab, var(--sell) 60%, black))"
-                : "linear-gradient(135deg, #555, #222)",
-              color: signal.direction === "WAIT" ? "#eee" : "#0a0a0a",
+                : "linear-gradient(135deg, var(--sell), color-mix(in oklab, var(--sell) 60%, black))",
+              color: "#0a0a0a",
             }}
           >
             <div className="text-xs tracking-[0.4em] opacity-70">DIRECTION</div>
