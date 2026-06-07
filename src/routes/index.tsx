@@ -107,6 +107,28 @@ function Index() {
     return () => window.clearInterval(id);
   }, [autoScan, onGenerate]);
 
+  useEffect(() => {
+    if (typeof window === "undefined" || !("Notification" in window)) return;
+    const showOpenNotification = () => {
+      const notification = new Notification("JAPANESE BOT READY", {
+        body: "Tap to scan live market and get UP/DOWN signal",
+        icon: "/favicon.png",
+        tag: "jb-open-scan",
+      });
+      notification.onclick = () => {
+        window.focus();
+        onGenerate(false);
+      };
+    };
+
+    if (Notification.permission === "granted") showOpenNotification();
+    if (Notification.permission === "default") {
+      Notification.requestPermission().then((permission) => {
+        if (permission === "granted") showOpenNotification();
+      }).catch(() => undefined);
+    }
+  }, [onGenerate]);
+
   const mmss = useMemo(() => {
     const m = Math.floor(remaining / 60).toString().padStart(2, "0");
     const s = (remaining % 60).toString().padStart(2, "0");
@@ -218,10 +240,10 @@ function Index() {
               color: signal.direction === "WAIT" ? "#eee" : "#0a0a0a",
             }}
           >
-            <div className="text-xs tracking-[0.4em] opacity-70">{signal.direction === "WAIT" ? "SCANNING" : "DIRECTION"}</div>
-            <div className="font-display text-5xl md:text-6xl font-black tracking-widest">{signal.direction === "WAIT" ? "WAIT" : signal.direction}</div>
+            <div className="text-xs tracking-[0.4em] opacity-70">DIRECTION</div>
+            <div className="font-display text-5xl md:text-6xl font-black tracking-widest">{signal.direction}</div>
             <div className="text-sm mt-2 tracking-wider opacity-80">
-              {signal.direction === "WAIT" ? `${signal.waitReason} — wait` : `Confidence ${signal.confidence}% • LIVE ✓ • HTF ${signal.htfAligned ? "✓ aligned" : "× mixed"}`}
+              Confidence {signal.confidence}% • {signal.marketStatus} • HTF {signal.htfAligned ? "✓ aligned" : "× mixed"}
             </div>
           </div>
 
@@ -250,7 +272,7 @@ function Index() {
             {history.slice(1).map((s, i) => (
               <div key={i} className="bg-card/60 border border-border rounded-lg px-4 py-3 flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  <span className={`font-display font-bold text-sm px-2 py-1 rounded ${s.direction === "BUY" ? "text-buy" : s.direction === "SELL" ? "text-sell" : "text-muted-foreground"}`} style={{ background: s.direction === "BUY" ? "color-mix(in oklab, var(--buy) 15%, transparent)" : s.direction === "SELL" ? "color-mix(in oklab, var(--sell) 15%, transparent)" : "color-mix(in oklab, var(--muted-foreground) 14%, transparent)" }}>
+                  <span className={`font-display font-bold text-sm px-2 py-1 rounded ${s.direction === "BUY" ? "text-buy" : "text-sell"}`} style={{ background: s.direction === "BUY" ? "color-mix(in oklab, var(--buy) 15%, transparent)" : "color-mix(in oklab, var(--sell) 15%, transparent)" }}>
                     {s.direction}
                   </span>
                   <span className="font-display tracking-wider text-sm">{s.pair}</span>
