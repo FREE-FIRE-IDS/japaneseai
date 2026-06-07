@@ -5,7 +5,7 @@ import { createLovableAiGatewayProvider } from "@/lib/ai-gateway.server";
 
 type Candle = { datetime: string; open: string; high: string; low: string; close: string };
 type Quote = { close?: string; bid?: string; ask?: string; datetime?: string; timestamp?: number; status?: string; message?: string };
-type Direction = "BUY" | "SELL" | "WAIT";
+type Direction = "BUY" | "SELL";
 type LiveQuote = { price: number; bid: number; ask: number; time: number };
 
 const PAIRS = [
@@ -319,7 +319,7 @@ export const generateSignal = createServerFn({ method: "POST" })
     const wantedDirection: "BUY" | "SELL" = bull === bear ? fallbackDirection : bull > bear ? "BUY" : "SELL";
     const liveAligned = wantedDirection === "BUY" ? liveBody > 0 && momentum > 0 : liveBody < 0 && momentum < 0;
     const htfAligned = wantedDirection === "BUY" ? htfTrendUp : !htfTrendUp;
-    let ai = { direction: "WAIT" as Direction, confidence: 0, reason: "AI not checked" };
+    let ai = { direction: wantedDirection as Direction, confidence: Math.max(55, Math.round(agreement * 100)), reason: "Live algorithmic scan" };
     if (isLive && spreadOk && liveBias >= 0.25) {
       try {
         ai = await askAiForSignal({
