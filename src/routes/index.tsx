@@ -74,24 +74,21 @@ function Index() {
       setSignal(s);
       setHistory((h) => [s, ...h].slice(0, 8));
 
-      const title = s.direction === "WAIT" ? "MARKET SCAN" : `${s.direction} ${s.pair}`;
-      const body = s.direction === "WAIT"
-        ? `${s.waitReason} • AI ${s.aiDirection} ${s.aiConfidence}%`
-        : `AI confirmed ${s.confidence}% • ${s.timeframe}`;
-      setBanner({ title, body, tone: s.direction === "WAIT" ? "wait" : "signal" });
+      const title = `${s.direction} ${s.pair}`;
+      const body = `Signal ${s.confidence}% • ${s.timeframe} • ${s.waitReason}`;
+      setBanner({ title, body, tone: "signal" });
       window.setTimeout(() => setBanner(null), 6500);
 
-      if (s.direction !== "WAIT") {
-        if (typeof navigator !== "undefined" && "vibrate" in navigator) {
-          navigator.vibrate?.([160, 70, 160, 70, 220]);
-        }
-        if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
-          new Notification(`${s.direction} ${s.pair}`, {
-            body: `AI confirmed ${s.confidence}% • ${s.timeframe}`,
-            icon: "/favicon.png",
-            tag: "jb-signal",
-          });
-        }
+      if (typeof navigator !== "undefined" && "vibrate" in navigator) {
+        navigator.vibrate?.([160, 70, 160, 70, 220]);
+      }
+      if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+        const notification = new Notification(`${s.direction} ${s.pair}`, {
+          body: `Signal ${s.confidence}% • ${s.timeframe}`,
+          icon: "/favicon.png",
+          tag: "jb-signal",
+        });
+        notification.onclick = () => window.focus();
       }
     } catch (e) {
       const message = e instanceof Error ? e.message : "Failed to generate signal";
