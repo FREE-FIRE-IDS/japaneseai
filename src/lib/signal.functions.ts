@@ -315,7 +315,8 @@ export const generateSignal = createServerFn({ method: "POST" })
     const total = bull + bear;
     const dominant = Math.max(bull, bear);
     const agreement = total === 0 ? 0 : dominant / total; // 0.5 - 1.0
-    const wantedDirection = bull > bear ? "BUY" : "SELL";
+    const fallbackDirection = momentum >= 0 ? "BUY" : "SELL";
+    const wantedDirection: "BUY" | "SELL" = bull === bear ? fallbackDirection : bull > bear ? "BUY" : "SELL";
     const liveAligned = wantedDirection === "BUY" ? liveBody > 0 && momentum > 0 : liveBody < 0 && momentum < 0;
     const htfAligned = wantedDirection === "BUY" ? htfTrendUp : !htfTrendUp;
     let ai = { direction: "WAIT" as Direction, confidence: 0, reason: "AI not checked" };
@@ -338,18 +339,24 @@ export const generateSignal = createServerFn({ method: "POST" })
           liveBias,
           htfTrendUp,
           spreadOk,
+          suggestedDirection: wantedDirection,
         });
       } catch {
-        ai = { direction: "WAIT", confidence: 0, reason: "AI filter unavailable" };
+        ai = { direction: wantedDirection, confidence: Math.max(55, Math.round(agreement * 100)), reason: "AI filter unavailable — using live algorithm" };
       }
     }
 
-    const direction: Direction =
-      isLive && spreadOk && htfAligned && liveAligned && liveBias >= 0.35 && agreement >= 0.82
-        && ai.direction === wantedDirection && ai.confidence >= 70
-        ? wantedDirection
-        : "WAIT";
-    const waitReason = !isLive
+    const actionScore = Math.round(
+      Math.min(
+        98,
+        Math.max(
+          52,
+          agreement * 72 + Math.min(liveBias, 1.4) * 10 + (liveAligned ? 8 : 0) + (htfAligned ? 8 : 0),
+        ),
+      ),
+    );
+    const direction: Direction = ai.direction === "BUY" || ai.direction === "SELL" ? ai.direction : wantedDirection;
+    const signalReason = !isLive
       ? "MARKET CLOSED / STALE DATA"
       : !spreadOk
       ? "SPREAD TOO HIGH"
@@ -365,12 +372,9 @@ export const generateSignal = createServerFn({ method: "POST" })
       ? `AI SAYS ${ai.direction}`
       : ai.confidence < 70
       ? "AI CONFIDENCE LOW"
-      : "WAITING FOR CLEAN ENTRY";
+      : "LIVE CONFIRMED";
 
-    // Confidence scaled from agreement (82% → 80 conf, 100% → 98 conf)
-    const confidence = direction === "WAIT"
-      ? Math.round(Math.min(79, agreement * 100))
-      : Math.min(98, Math.round((Math.min(98, 80 + (agreement - 0.82) * 100) + ai.confidence) / 2));
+    const confidence = Math.min(98, Math.max(actionScore, ai.confidence || 0));
 
     const expirySeconds = TF_SECONDS[data.timeframe];
 
@@ -388,10 +392,10 @@ export const generateSignal = createServerFn({ method: "POST" })
       expirySeconds,
       generatedAt: Date.now(),
       sparkline: closes.slice(-30),
-      htfAligned: direction === "WAIT" ? false : htfAligned,
+      htfAligned,
       isLive,
       marketStatus: isLive ? "LIVE" : "MARKET CLOSED",
-      waitReason: direction === "WAIT" ? waitReason : "LIVE CONFIRMED",
+      waitReason: signalReason,
       aiDirection: ai.direction,
       aiConfidence: ai.confidence,
       aiReason: ai.reason,
