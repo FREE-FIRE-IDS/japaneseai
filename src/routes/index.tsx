@@ -8,9 +8,9 @@ export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
       { title: "JAPANESE BOT — Forex Signals" },
-      { name: "description", content: "Real-time forex BUY/SELL signals powered by live market data." },
+      { name: "description", content: "Real-time forex UP/DOWN signals powered by live market data." },
       { property: "og:title", content: "JAPANESE BOT" },
-      { property: "og:description", content: "Real-time forex BUY/SELL signals." },
+      { property: "og:description", content: "Real-time forex UP/DOWN signals." },
       { name: "theme-color", content: "#00ff88" },
     ],
   }),
@@ -26,6 +26,10 @@ const TIMEFRAMES = [
   { value: "15min", label: "15M" },
   { value: "30min", label: "30M" },
 ];
+
+function displayDirection(direction: "BUY" | "SELL") {
+  return direction === "BUY" ? "UP" : "DOWN";
+}
 
 function Index() {
   const { pairs } = Route.useLoaderData();
@@ -74,24 +78,22 @@ function Index() {
       setSignal(s);
       setHistory((h) => [s, ...h].slice(0, 8));
 
-      const title = s.direction === "WAIT" ? "MARKET SCAN" : `${s.direction} ${s.pair}`;
-      const body = s.direction === "WAIT"
-        ? `${s.waitReason} • AI ${s.aiDirection} ${s.aiConfidence}%`
-        : `AI confirmed ${s.confidence}% • ${s.timeframe}`;
-      setBanner({ title, body, tone: s.direction === "WAIT" ? "wait" : "signal" });
+      const directionLabel = displayDirection(s.direction);
+      const title = `${directionLabel} ${s.pair}`;
+      const body = `Signal ${s.confidence}% • ${s.timeframe} • ${s.waitReason}`;
+      setBanner({ title, body, tone: "signal" });
       window.setTimeout(() => setBanner(null), 6500);
 
-      if (s.direction !== "WAIT") {
-        if (typeof navigator !== "undefined" && "vibrate" in navigator) {
-          navigator.vibrate?.([160, 70, 160, 70, 220]);
-        }
-        if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
-          new Notification(`${s.direction} ${s.pair}`, {
-            body: `AI confirmed ${s.confidence}% • ${s.timeframe}`,
-            icon: "/favicon.png",
-            tag: "jb-signal",
-          });
-        }
+      if (typeof navigator !== "undefined" && "vibrate" in navigator) {
+        navigator.vibrate?.([160, 70, 160, 70, 220]);
+      }
+      if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+        const notification = new Notification(`${directionLabel} ${s.pair}`, {
+          body: `Signal ${s.confidence}% • ${s.timeframe}`,
+          icon: "/favicon.png",
+          tag: "jb-signal",
+        });
+        notification.onclick = () => window.focus();
       }
     } catch (e) {
       const message = e instanceof Error ? e.message : "Failed to generate signal";
@@ -109,6 +111,28 @@ function Index() {
     const id = window.setInterval(() => onGenerate(true), 20_000);
     return () => window.clearInterval(id);
   }, [autoScan, onGenerate]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !("Notification" in window)) return;
+    const showOpenNotification = () => {
+      const notification = new Notification("JAPANESE BOT READY", {
+        body: "Tap to scan live market and get UP/DOWN signal",
+        icon: "/favicon.png",
+        tag: "jb-open-scan",
+      });
+      notification.onclick = () => {
+        window.focus();
+        onGenerate(false);
+      };
+    };
+
+    if (Notification.permission === "granted") showOpenNotification();
+    if (Notification.permission === "default") {
+      Notification.requestPermission().then((permission) => {
+        if (permission === "granted") showOpenNotification();
+      }).catch(() => undefined);
+    }
+  }, [onGenerate]);
 
   const mmss = useMemo(() => {
     const m = Math.floor(remaining / 60).toString().padStart(2, "0");
@@ -215,16 +239,14 @@ function Index() {
             style={{
               background: signal.direction === "BUY"
                 ? "linear-gradient(135deg, var(--buy), color-mix(in oklab, var(--buy) 60%, black))"
-                : signal.direction === "SELL"
-                ? "linear-gradient(135deg, var(--sell), color-mix(in oklab, var(--sell) 60%, black))"
-                : "linear-gradient(135deg, #555, #222)",
-              color: signal.direction === "WAIT" ? "#eee" : "#0a0a0a",
+                : "linear-gradient(135deg, var(--sell), color-mix(in oklab, var(--sell) 60%, black))",
+              color: "#0a0a0a",
             }}
           >
-            <div className="text-xs tracking-[0.4em] opacity-70">{signal.direction === "WAIT" ? "SCANNING" : "DIRECTION"}</div>
-            <div className="font-display text-5xl md:text-6xl font-black tracking-widest">{signal.direction === "WAIT" ? "WAIT" : signal.direction}</div>
+            <div className="text-xs tracking-[0.4em] opacity-70">DIRECTION</div>
+            <div className="font-display text-5xl md:text-6xl font-black tracking-widest">{displayDirection(signal.direction)}</div>
             <div className="text-sm mt-2 tracking-wider opacity-80">
-              {signal.direction === "WAIT" ? `${signal.waitReason} — wait` : `Confidence ${signal.confidence}% • LIVE ✓ • HTF ${signal.htfAligned ? "✓ aligned" : "× mixed"}`}
+              Confidence {signal.confidence}% • {signal.marketStatus} • HTF {signal.htfAligned ? "✓ aligned" : "× mixed"}
             </div>
           </div>
 
@@ -253,8 +275,8 @@ function Index() {
             {history.slice(1).map((s, i) => (
               <div key={i} className="bg-card/60 border border-border rounded-lg px-4 py-3 flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  <span className={`font-display font-bold text-sm px-2 py-1 rounded ${s.direction === "BUY" ? "text-buy" : s.direction === "SELL" ? "text-sell" : "text-muted-foreground"}`} style={{ background: s.direction === "BUY" ? "color-mix(in oklab, var(--buy) 15%, transparent)" : s.direction === "SELL" ? "color-mix(in oklab, var(--sell) 15%, transparent)" : "color-mix(in oklab, var(--muted-foreground) 14%, transparent)" }}>
-                    {s.direction}
+                  <span className={`font-display font-bold text-sm px-2 py-1 rounded ${s.direction === "BUY" ? "text-buy" : "text-sell"}`} style={{ background: s.direction === "BUY" ? "color-mix(in oklab, var(--buy) 15%, transparent)" : "color-mix(in oklab, var(--sell) 15%, transparent)" }}>
+                    {displayDirection(s.direction)}
                   </span>
                   <span className="font-display tracking-wider text-sm">{s.pair}</span>
                   <span className="text-xs text-muted-foreground">{s.timeframe}</span>
