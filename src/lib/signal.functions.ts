@@ -131,14 +131,13 @@ export const generateSignal = createServerFn({ method: "POST" })
   })
   .handler(async ({ data }) => {
     const key = process.env.TWELVE_DATA_API_KEY;
-    const alphaKey = process.env.ALPHA_VANTAGE_API_KEY || "HUO12PIJ5DFCNFPT";
-    if (!key) throw new Error("API key not configured");
+    const alphaKey = process.env.ALPHA_VANTAGE_API_KEY;
 
-    const { candles, source } = await fetchMarketData(data.pair, data.timeframe, key, alphaKey);
+    const { candles } = await fetchMarketData(data.pair, data.timeframe, 260, key, alphaKey);
     const validCandles = candles.filter((c: Candle) =>
       [c.open, c.high, c.low, c.close].every((value) => Number.isFinite(parseFloat(value))),
     );
-    if (validCandles.length < 205) throw new Error("Not enough real OHLC candles for EMA 200 analysis");
+    if (validCandles.length < 205) throw new Error("Not enough real OHLC candles yet. Try another pair or timeframe.");
 
     const latestCandle = validCandles[validCandles.length - 1];
     const previousCandle = validCandles[validCandles.length - 2];
@@ -147,11 +146,27 @@ export const generateSignal = createServerFn({ method: "POST" })
     const isLive = latestCandleTime > 0 && marketAge <= Math.max(180_000, TF_SECONDS[data.timeframe] * 2200);
 
     const opens = validCandles.map((c: Candle) => parseFloat(c.open));
+    const highs = validCandles.map((c: Candle) => parseFloat(c.high));
+    const lows = validCandles.map((c: Candle) => parseFloat(c.low));
     const closes = validCandles.map((c: Candle) => parseFloat(c.close));
+    const latestHigh = highs[highs.length - 1];
+    const latestLow = lows[lows.length - 1];
     const lastOpen = opens[opens.length - 1];
     const lastPrice = closes[closes.length - 1];
     const prevPrice = closes[closes.length - 2] ?? lastPrice;
     const threeBack = closes[closes.length - 4] ?? prevPrice;
+    const candlesPerTenMinutes = Math.max(2, Math.ceil(600 / TF_SECONDS[data.timeframe]));
+    const candlesBeforeLatest = validCandles.slice(0, -1);
+    const tenMinuteWindow = candlesBeforeLatest
+      .filter((c: Candle) => {
+        const t = parseMarketTime(c.datetime);
+        return latestCandleTime > 0 && t > 0 && latestCandleTime - t <= 600_000;
+      })
+      .slice(-candlesPerTenMinutes);
+    const marketWindow = tenMinuteWindow.length >= 2 ? tenMinuteWindow : candlesBeforeLatest.slice(-candlesPerTenMinutes);
+    const windowOpen = parseFloat(marketWindow[0]?.open ?? previousCandle.open);
+    const windowClose = parseFloat(marketWindow[marketWindow.length - 1]?.close ?? previousCandle.close);
+    const windowMid = marketWindow.reduce((sum, c) => sum + parseFloat(c.close), 0) / Math.max(1, marketWindow.length);
 
     const ema50Series = emaSeries(closes, 50);
     const ema200Series = emaSeries(closes, 200);
@@ -161,35 +176,53 @@ export const generateSignal = createServerFn({ method: "POST" })
     const candleType = describeCandle(lastOpen, lastPrice);
     const momentum = ((lastPrice - prevPrice) / prevPrice) * 10000;
     const momentum3 = ((lastPrice - threeBack) / threeBack) * 10000;
+    const tenMinuteMove = ((windowClose - windowOpen) / windowOpen) * 10000;
+    const latestRange = Math.max(latestHigh - latestLow, lastPrice * 0.00001);
+    const latestBody = lastPrice - lastOpen;
+    const bodyRatio = Math.abs(latestBody) / latestRange;
+    const closePosition = (lastPrice - latestLow) / latestRange;
+    const ema50Slope = ema50Series[ema50Series.length - 1] - ema50Series[ema50Series.length - 4];
 
     const upTrend = ema50 > ema200;
     const downTrend = ema50 < ema200;
     const bullishCandle = lastPrice > lastOpen;
     const bearishCandle = lastPrice < lastOpen;
-    const upwardMomentum = momentum > 0 && momentum3 >= 0;
-    const downwardMomentum = momentum < 0 && momentum3 <= 0;
-    const buyRule = upTrend && r > 40 && r < 70 && bullishCandle && upwardMomentum;
-    const sellRule = downTrend && r > 30 && r < 60 && bearishCandle && downwardMomentum;
+    const upwardMomentum = momentum > 0 && momentum3 >= 0 && tenMinuteMove >= 0;
+    const downwardMomentum = momentum < 0 && momentum3 <= 0 && tenMinuteMove <= 0;
+    const latestBullConfirm = bullishCandle && closePosition >= 0.58 && bodyRatio >= 0.25;
+    const latestBearConfirm = bearishCandle && closePosition <= 0.42 && bodyRatio >= 0.25;
+    const buyRule = upTrend && r > 40 && r < 70 && latestBullConfirm && upwardMomentum && lastPrice >= windowMid;
+    const sellRule = downTrend && r > 30 && r < 60 && latestBearConfirm && downwardMomentum && lastPrice <= windowMid;
 
     let buyScore = 0;
     let sellScore = 0;
-    if (upTrend) buyScore += 35;
-    if (downTrend) sellScore += 35;
-    if (r > 40 && r < 70) buyScore += 20;
-    if (r > 30 && r < 60) sellScore += 20;
-    if (bullishCandle) buyScore += 20;
-    if (bearishCandle) sellScore += 20;
-    if (upwardMomentum) buyScore += 25;
-    if (downwardMomentum) sellScore += 25;
+    if (upTrend) buyScore += 24;
+    if (downTrend) sellScore += 24;
+    if (ema50Slope > 0) buyScore += 8;
+    if (ema50Slope < 0) sellScore += 8;
+    if (lastPrice > ema50) buyScore += 8;
+    if (lastPrice < ema50) sellScore += 8;
+    if (r > 40 && r < 70) buyScore += 16;
+    if (r > 30 && r < 60) sellScore += 16;
+    if (tenMinuteMove > 0) buyScore += 18;
+    if (tenMinuteMove < 0) sellScore += 18;
+    if (lastPrice >= windowMid) buyScore += 8;
+    if (lastPrice <= windowMid) sellScore += 8;
+    if (latestBullConfirm) buyScore += 24;
+    if (latestBearConfirm) sellScore += 24;
+    if (upwardMomentum) buyScore += 14;
+    if (downwardMomentum) sellScore += 14;
 
     const direction: Direction = buyRule ? "BUY" : sellRule ? "SELL" : buyScore >= sellScore ? "BUY" : "SELL";
     const selectedScore = direction === "BUY" ? buyScore : sellScore;
+    const oppositeScore = direction === "BUY" ? sellScore : buyScore;
     const trendGap = Math.abs((ema50 - ema200) / lastPrice) * 10000;
     const momentumPower = Math.min(10, Math.abs(momentum3));
-    const confidence = clamp(Math.round(selectedScore * 0.82 + Math.min(8, trendGap) + momentumPower), 52, 98);
+    const strictSetup = direction === "BUY" ? buyRule : sellRule;
+    const confidence = clamp(Math.round((strictSetup ? 72 : 58) + (selectedScore - oppositeScore) * 0.45 + Math.min(8, trendGap) + momentumPower), strictSetup ? 82 : 58, 96);
     const htfAligned = direction === "BUY" ? upTrend : downTrend;
     const livePressure = clamp(Math.round((Math.abs(lastPrice - lastOpen) / Math.max(Math.abs(prevPrice - lastOpen), lastPrice * 0.00004)) * 100), 0, 250);
-    const signalReason = `${direction} by EMA50 ${direction === "BUY" ? ">" : "<"} EMA200, RSI ${round(r, 1)}, ${candleType} candle, ${direction === "BUY" ? "upward" : "downward"} momentum`;
+    const signalReason = `${direction} by last 10-min ${tenMinuteMove >= 0 ? "bullish" : "bearish"} flow, latest ${candleType} candle, EMA50 ${direction === "BUY" ? ">" : "<"} EMA200, RSI ${round(r, 1)}`;
 
     const expirySeconds = TF_SECONDS[data.timeframe];
 
@@ -213,7 +246,7 @@ export const generateSignal = createServerFn({ method: "POST" })
       waitReason: signalReason,
       aiDirection: direction,
       aiConfidence: confidence,
-      aiReason: `${source} OHLC only • strict EMA50/EMA200 + RSI14 + candle + momentum rules`,
+      aiReason: `Real OHLC only • previous 10-min flow + latest candle + EMA50/EMA200 + RSI14`,
       livePressure,
       marketTime: latestCandleTime,
     };
