@@ -1,45 +1,24 @@
 import { createServerFn } from "@tanstack/react-start";
-import { generateText, Output } from "ai";
-import { z } from "zod";
-import { createLovableAiGatewayProvider } from "@/lib/ai-gateway.server";
 
 type Candle = { datetime: string; open: string; high: string; low: string; close: string };
-type Quote = { close?: string; bid?: string; ask?: string; datetime?: string; timestamp?: number; status?: string; message?: string };
 type Direction = "BUY" | "SELL";
-type LiveQuote = { price: number; bid: number; ask: number; time: number };
 
 const PAIRS = [
   "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD", "USD/CHF", "NZD/USD",
   "EUR/JPY", "GBP/JPY", "EUR/GBP", "AUD/JPY", "EUR/AUD", "GBP/CAD", "CHF/JPY",
 ];
 
-// Higher timeframe used for trend confirmation
-const HTF: Record<string, string> = {
-  "1min": "5min",
-  "5min": "15min",
-  "15min": "1h",
-  "30min": "2h",
-};
-
-const TF_SECONDS: Record<string, number> = { "1min": 60, "5min": 300, "15min": 900, "30min": 1800 };
+const TF_SECONDS: Record<string, number> = { "1min": 60, "5min": 300, "15min": 900 };
 const ALPHA_INTERVALS: Record<string, string> = {
   "1min": "1min",
   "5min": "5min",
   "15min": "15min",
-  "30min": "30min",
-  "1h": "60min",
-  "2h": "60min",
 };
 
 function parseMarketTime(value?: string, timestamp?: number) {
   if (timestamp && Number.isFinite(timestamp)) return timestamp * 1000;
   if (!value) return 0;
   return Date.parse(`${value.replace(" ", "T")}Z`);
-}
-
-function median(values: number[]) {
-  const sorted = [...values].sort((a, b) => a - b);
-  return sorted[Math.floor(sorted.length / 2)] ?? 0;
 }
 
 function rsi(closes: number[], period = 14): number {
@@ -63,26 +42,11 @@ function rsi(closes: number[], period = 14): number {
   return 100 - 100 / (1 + rs);
 }
 
-function sma(values: number[], period: number): number {
-  const slice = values.slice(-period);
-  return slice.reduce((a, b) => a + b, 0) / slice.length;
-}
-
 function emaSeries(values: number[], period: number): number[] {
   const k = 2 / (period + 1);
   const out: number[] = [values[0]];
   for (let i = 1; i < values.length; i++) out.push(values[i] * k + out[i - 1] * (1 - k));
   return out;
-}
-
-function macd(values: number[]) {
-  const e12 = emaSeries(values, 12);
-  const e26 = emaSeries(values, 26);
-  const macdLine = values.map((_, i) => e12[i] - e26[i]);
-  const signalLine = emaSeries(macdLine.slice(-Math.min(values.length, 35)), 9);
-  const m = macdLine[macdLine.length - 1];
-  const s = signalLine[signalLine.length - 1];
-  return { macd: m, signal: s, hist: m - s };
 }
 
 async function fetchSeries(pair: string, interval: string, size: number, key: string) {
@@ -95,21 +59,6 @@ async function fetchSeries(pair: string, interval: string, size: number, key: st
   return [...json.values].reverse();
 }
 
-async function fetchQuote(pair: string, key: string) {
-  const url = `https://api.twelvedata.com/quote?symbol=${encodeURIComponent(pair)}&apikey=${key}`;
-  const res = await fetch(url);
-  const json: Quote = await res.json().catch(() => ({}));
-  if (!res.ok || json.status === "error") throw new Error(json.message || `Live quote error (HTTP ${res.status})`);
-
-  const bid = json.bid ? parseFloat(json.bid) : NaN;
-  const ask = json.ask ? parseFloat(json.ask) : NaN;
-  const close = json.close ? parseFloat(json.close) : NaN;
-  const price = Number.isFinite(bid) && Number.isFinite(ask) ? (bid + ask) / 2 : close;
-  if (!Number.isFinite(price)) throw new Error("Live quote unavailable");
-
-  return { price, bid, ask, time: parseMarketTime(json.datetime, json.timestamp) };
-}
-
 function splitForexPair(pair: string) {
   const [from, to] = pair.split("/");
   if (!from || !to) throw new Error("Invalid forex pair");
@@ -119,7 +68,8 @@ function splitForexPair(pair: string) {
 async function fetchAlphaSeries(pair: string, interval: string, size: number, key: string) {
   const { from, to } = splitForexPair(pair);
   const alphaInterval = ALPHA_INTERVALS[interval] ?? "60min";
-  const url = `https://www.alphavantage.co/query?function=FX_INTRADAY&from_symbol=${encodeURIComponent(from)}&to_symbol=${encodeURIComponent(to)}&interval=${alphaInterval}&outputsize=compact&apikey=${key}`;
+  const outputsize = size > 100 ? "full" : "compact";
+  const url = `https://www.alphavantage.co/query?function=FX_INTRADAY&from_symbol=${encodeURIComponent(from)}&to_symbol=${encodeURIComponent(to)}&interval=${alphaInterval}&outputsize=${outputsize}&apikey=${key}`;
   const res = await fetch(url);
   const json: Record<string, unknown> = await res.json().catch(() => ({}));
   const apiMessage = json["Error Message"] || json.Information || json.Note;
@@ -144,95 +94,26 @@ async function fetchAlphaSeries(pair: string, interval: string, size: number, ke
 
 async function fetchMarketData(pair: string, timeframe: string, twelveKey: string, alphaKey?: string) {
   try {
-    const [ltf, htf, quote] = await Promise.all([
-      fetchSeries(pair, timeframe, 100, twelveKey),
-      fetchSeries(pair, HTF[timeframe], 60, twelveKey),
-      fetchQuote(pair, twelveKey),
-    ]);
-    return { ltf, htf, quote };
+    return { candles: await fetchSeries(pair, timeframe, 260, twelveKey), source: "Twelve Data" };
   } catch (primaryError) {
     if (!alphaKey) throw primaryError;
-
-    const [ltf, htf] = await Promise.all([
-      fetchAlphaSeries(pair, timeframe, 100, alphaKey),
-      fetchAlphaSeries(pair, HTF[timeframe], 60, alphaKey),
-    ]);
-    const latest = ltf[ltf.length - 1];
-    const price = parseFloat(latest?.close ?? "NaN");
-    if (!latest || !Number.isFinite(price)) throw primaryError;
-
-    const quote: LiveQuote = {
-      price,
-      bid: Number.NaN,
-      ask: Number.NaN,
-      time: parseMarketTime(latest.datetime),
-    };
-    return { ltf, htf, quote };
+    return { candles: await fetchAlphaSeries(pair, timeframe, 260, alphaKey), source: "Fallback feed" };
   }
 }
 
-const AiSignalSchema = z.object({
-  direction: z.enum(["BUY", "SELL"]),
-  confidence: z.number(),
-  reason: z.string(),
-});
+function round(value: number, places = 5) {
+  const factor = 10 ** places;
+  return Math.round(value * factor) / factor;
+}
 
-async function askAiForSignal(input: {
-  pair: string;
-  timeframe: string;
-  price: number;
-  closes: number[];
-  htfCloses: number[];
-  rsi: number;
-  sma20: number;
-  sma50: number;
-  ema9: number;
-  ema21: number;
-  macdHist: number;
-  momentum: number;
-  liveBody: number;
-  liveBias: number;
-  htfTrendUp: boolean;
-  spreadOk: boolean;
-  suggestedDirection: "BUY" | "SELL";
-}) {
-  const key = process.env.LOVABLE_API_KEY;
-  if (!key) return { direction: input.suggestedDirection as Direction, confidence: 55, reason: "Algorithmic live-data mode" };
+function clamp(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value));
+}
 
-  const gateway = createLovableAiGatewayProvider(key);
-  const { output } = await generateText({
-    model: gateway("google/gemini-3-flash-preview"),
-    output: Output.object({ schema: AiSignalSchema }),
-    system: "You are a strict live forex signal selector. Never invent market data. Use only the supplied candles, quote, and indicators. You must choose BUY or SELL only. No guaranteed-profit claims.",
-    prompt: JSON.stringify({
-      pair: input.pair,
-      timeframe: input.timeframe,
-      liveQuote: input.price,
-      lastCloses: input.closes.slice(-24),
-      higherTimeframeCloses: input.htfCloses.slice(-18),
-      indicators: {
-        rsi: input.rsi,
-        sma20: input.sma20,
-        sma50: input.sma50,
-        ema9: input.ema9,
-        ema21: input.ema21,
-        macdHist: input.macdHist,
-        momentum: input.momentum,
-        liveBody: input.liveBody,
-        livePressureRatio: input.liveBias,
-        htfTrendUp: input.htfTrendUp,
-        spreadOk: input.spreadOk,
-      },
-      suggestedDirection: input.suggestedDirection,
-      rule: "direction must be BUY or SELL only. If mixed, choose the stronger side from momentum, EMA/MACD, live candle pressure, and higher timeframe. confidence 50-98.",
-    }),
-  });
-
-  return {
-    direction: output.direction as Direction,
-    confidence: Math.max(0, Math.min(98, Math.round(output.confidence))),
-    reason: output.reason.slice(0, 140),
-  };
+function describeCandle(open: number, close: number) {
+  if (close > open) return "bullish";
+  if (close < open) return "bearish";
+  return "flat";
 }
 
 export const getPairs = createServerFn({ method: "GET" }).handler(async () => PAIRS);
@@ -240,7 +121,7 @@ export const getPairs = createServerFn({ method: "GET" }).handler(async () => PA
 export const generateSignal = createServerFn({ method: "POST" })
   .inputValidator((d: { pair: string; timeframe: string }) => {
     if (!PAIRS.includes(d.pair)) throw new Error("Invalid pair");
-    if (!["1min", "5min", "15min", "30min"].includes(d.timeframe)) throw new Error("Invalid timeframe");
+    if (!["1min", "5min", "15min"].includes(d.timeframe)) throw new Error("Invalid timeframe");
     return d;
   })
   .handler(async ({ data }) => {
@@ -248,133 +129,62 @@ export const generateSignal = createServerFn({ method: "POST" })
     const alphaKey = process.env.ALPHA_VANTAGE_API_KEY || "HUO12PIJ5DFCNFPT";
     if (!key) throw new Error("API key not configured");
 
-    // Pull execution candles, higher-timeframe trend, and the latest live quote together.
-    // If the primary feed is limited/offline, silently switch to Alpha Vantage.
-    const { ltf, htf, quote } = await fetchMarketData(data.pair, data.timeframe, key, alphaKey);
-
-    const latestCandle = ltf[ltf.length - 1];
-    const latestCandleTime = parseMarketTime(latestCandle?.datetime);
-    const isLive = quote.time > 0
-      ? Date.now() - quote.time <= Math.max(90_000, TF_SECONDS[data.timeframe] * 1500)
-      : Date.now() - latestCandleTime <= Math.max(90_000, TF_SECONDS[data.timeframe] * 1500);
-
-    const rawCloses = ltf.map((c) => parseFloat(c.close));
-    const closes = [...rawCloses.slice(0, -1), quote.price];
-    const htfCloses = htf.map((c) => parseFloat(c.close));
-
-    const lastPrice = quote.price;
-    const prevPrice = closes[closes.length - 2] ?? lastPrice;
-
-    const r = rsi(closes, 14);
-    const sma20 = sma(closes, Math.min(20, closes.length));
-    const sma50 = sma(closes, Math.min(50, closes.length));
-    const ema9Series = emaSeries(closes, 9);
-    const ema21Series = emaSeries(closes, 21);
-    const ema9 = ema9Series[ema9Series.length - 1];
-    const ema21 = ema21Series[ema21Series.length - 1];
-    const ema9Prev = ema9Series[ema9Series.length - 2] ?? ema9;
-    const ema21Prev = ema21Series[ema21Series.length - 2] ?? ema21;
-
-    const m = macd(closes);
-    const momentum = ((lastPrice - prevPrice) / prevPrice) * 10000;
-    const candleBodies = ltf.slice(-12).map((c) => Math.abs(parseFloat(c.close) - parseFloat(c.open)));
-    const typicalBody = median(candleBodies);
-    const currentOpen = parseFloat(latestCandle.open);
-    const liveBody = lastPrice - currentOpen;
-    const liveBias = typicalBody > 0 ? Math.abs(liveBody) / typicalBody : 0;
-    const spread = Number.isFinite(quote.bid) && Number.isFinite(quote.ask) ? Math.abs(quote.ask - quote.bid) : 0;
-    const spreadOk = spread === 0 || spread <= Math.max(typicalBody * 0.45, lastPrice * 0.00008);
-
-    // Higher timeframe trend
-    const htfEma = emaSeries(htfCloses, 21);
-    const htfTrendUp = htfCloses[htfCloses.length - 1] > htfEma[htfEma.length - 1];
-
-    // Confluence scoring — each confirmed condition adds weight. Live candle and quote freshness are mandatory.
-    let bull = 0, bear = 0;
-    // RSI zones
-    if (r < 30) bull += 2; else if (r < 45) bull += 1;
-    if (r > 70) bear += 2; else if (r > 55) bear += 1;
-    // Price vs SMAs
-    if (lastPrice > sma20) bull += 1; else bear += 1;
-    if (lastPrice > sma50) bull += 1; else bear += 1;
-    // EMA stack + cross
-    if (ema9 > ema21) bull += 1; else bear += 1;
-    if (ema9Prev <= ema21Prev && ema9 > ema21) bull += 2; // fresh bullish cross
-    if (ema9Prev >= ema21Prev && ema9 < ema21) bear += 2; // fresh bearish cross
-    // MACD
-    if (m.hist > 0) bull += 1; else bear += 1;
-    if (m.macd > m.signal) bull += 1; else bear += 1;
-    // Momentum
-    if (momentum > 0) bull += 1; else if (momentum < 0) bear += 1;
-    // Live candle pressure from the current quote, not only closed candles
-    if (liveBody > 0 && liveBias >= 0.35) bull += 2;
-    if (liveBody < 0 && liveBias >= 0.35) bear += 2;
-    // HTF confluence (heavy weight — must align)
-    if (htfTrendUp) bull += 2; else bear += 2;
-
-    const total = bull + bear;
-    const dominant = Math.max(bull, bear);
-    const agreement = total === 0 ? 0 : dominant / total; // 0.5 - 1.0
-    const fallbackDirection = momentum >= 0 ? "BUY" : "SELL";
-    const wantedDirection: "BUY" | "SELL" = bull === bear ? fallbackDirection : bull > bear ? "BUY" : "SELL";
-    const liveAligned = wantedDirection === "BUY" ? liveBody > 0 && momentum > 0 : liveBody < 0 && momentum < 0;
-    const htfAligned = wantedDirection === "BUY" ? htfTrendUp : !htfTrendUp;
-    let ai = { direction: wantedDirection as Direction, confidence: Math.max(55, Math.round(agreement * 100)), reason: "Live algorithmic scan" };
-    if (isLive && spreadOk && liveBias >= 0.25) {
-      try {
-        ai = await askAiForSignal({
-          pair: data.pair,
-          timeframe: data.timeframe,
-          price: lastPrice,
-          closes,
-          htfCloses,
-          rsi: r,
-          sma20,
-          sma50,
-          ema9,
-          ema21,
-          macdHist: m.hist,
-          momentum,
-          liveBody,
-          liveBias,
-          htfTrendUp,
-          spreadOk,
-          suggestedDirection: wantedDirection,
-        });
-      } catch {
-        ai = { direction: wantedDirection, confidence: Math.max(55, Math.round(agreement * 100)), reason: "AI filter unavailable — using live algorithm" };
-      }
-    }
-
-    const actionScore = Math.round(
-      Math.min(
-        98,
-        Math.max(
-          52,
-          agreement * 72 + Math.min(liveBias, 1.4) * 10 + (liveAligned ? 8 : 0) + (htfAligned ? 8 : 0),
-        ),
-      ),
+    const { candles, source } = await fetchMarketData(data.pair, data.timeframe, key, alphaKey);
+    const validCandles = candles.filter((c: Candle) =>
+      [c.open, c.high, c.low, c.close].every((value) => Number.isFinite(parseFloat(value))),
     );
-    const direction: Direction = ai.direction === "BUY" || ai.direction === "SELL" ? ai.direction : wantedDirection;
-    const signalReason = !isLive
-      ? "MARKET CLOSED / STALE DATA"
-      : !spreadOk
-      ? "SPREAD TOO HIGH"
-      : !htfAligned
-      ? "HTF NOT ALIGNED"
-      : !liveAligned
-      ? "LIVE CANDLE NOT CONFIRMED"
-      : liveBias < 0.35
-      ? "WEAK LIVE PRESSURE"
-      : agreement < 0.82
-      ? "LOW CONFLUENCE"
-      : ai.direction !== wantedDirection
-      ? `AI SAYS ${ai.direction}`
-      : ai.confidence < 70
-      ? "AI CONFIDENCE LOW"
-      : "LIVE CONFIRMED";
+    if (validCandles.length < 205) throw new Error("Not enough real OHLC candles for EMA 200 analysis");
 
-    const confidence = Math.min(98, Math.max(actionScore, ai.confidence || 0));
+    const latestCandle = validCandles[validCandles.length - 1];
+    const previousCandle = validCandles[validCandles.length - 2];
+    const latestCandleTime = parseMarketTime(latestCandle.datetime);
+    const marketAge = latestCandleTime > 0 ? Date.now() - latestCandleTime : 0;
+    const isLive = latestCandleTime > 0 && marketAge <= Math.max(180_000, TF_SECONDS[data.timeframe] * 2200);
+
+    const opens = validCandles.map((c: Candle) => parseFloat(c.open));
+    const closes = validCandles.map((c: Candle) => parseFloat(c.close));
+    const lastOpen = opens[opens.length - 1];
+    const lastPrice = closes[closes.length - 1];
+    const prevPrice = closes[closes.length - 2] ?? lastPrice;
+    const threeBack = closes[closes.length - 4] ?? prevPrice;
+
+    const ema50Series = emaSeries(closes, 50);
+    const ema200Series = emaSeries(closes, 200);
+    const ema50 = ema50Series[ema50Series.length - 1];
+    const ema200 = ema200Series[ema200Series.length - 1];
+    const r = rsi(closes, 14);
+    const candleType = describeCandle(lastOpen, lastPrice);
+    const momentum = ((lastPrice - prevPrice) / prevPrice) * 10000;
+    const momentum3 = ((lastPrice - threeBack) / threeBack) * 10000;
+
+    const upTrend = ema50 > ema200;
+    const downTrend = ema50 < ema200;
+    const bullishCandle = lastPrice > lastOpen;
+    const bearishCandle = lastPrice < lastOpen;
+    const upwardMomentum = momentum > 0 && momentum3 >= 0;
+    const downwardMomentum = momentum < 0 && momentum3 <= 0;
+    const buyRule = upTrend && r > 40 && r < 70 && bullishCandle && upwardMomentum;
+    const sellRule = downTrend && r > 30 && r < 60 && bearishCandle && downwardMomentum;
+
+    let buyScore = 0;
+    let sellScore = 0;
+    if (upTrend) buyScore += 35;
+    if (downTrend) sellScore += 35;
+    if (r > 40 && r < 70) buyScore += 20;
+    if (r > 30 && r < 60) sellScore += 20;
+    if (bullishCandle) buyScore += 20;
+    if (bearishCandle) sellScore += 20;
+    if (upwardMomentum) buyScore += 25;
+    if (downwardMomentum) sellScore += 25;
+
+    const direction: Direction = buyRule ? "BUY" : sellRule ? "SELL" : buyScore >= sellScore ? "BUY" : "SELL";
+    const selectedScore = direction === "BUY" ? buyScore : sellScore;
+    const trendGap = Math.abs((ema50 - ema200) / lastPrice) * 10000;
+    const momentumPower = Math.min(10, Math.abs(momentum3));
+    const confidence = clamp(Math.round(selectedScore * 0.82 + Math.min(8, trendGap) + momentumPower), 52, 98);
+    const htfAligned = direction === "BUY" ? upTrend : downTrend;
+    const livePressure = clamp(Math.round((Math.abs(lastPrice - lastOpen) / Math.max(Math.abs(prevPrice - lastOpen), lastPrice * 0.00004)) * 100), 0, 250);
+    const signalReason = `${direction} by EMA50 ${direction === "BUY" ? ">" : "<"} EMA200, RSI ${round(r, 1)}, ${candleType} candle, ${direction === "BUY" ? "upward" : "downward"} momentum`;
 
     const expirySeconds = TF_SECONDS[data.timeframe];
 
@@ -383,23 +193,23 @@ export const generateSignal = createServerFn({ method: "POST" })
       timeframe: data.timeframe,
       direction,
       confidence,
-      strength: Math.round(agreement * 100),
+      strength: selectedScore,
       price: lastPrice,
-      rsi: Math.round(r * 10) / 10,
-      sma20: Math.round(sma20 * 100000) / 100000,
-      ema9: Math.round(ema9 * 100000) / 100000,
+      rsi: round(r, 1),
+      sma20: round(ema200),
+      ema9: round(ema50),
       momentum: Math.round(momentum * 10) / 10,
       expirySeconds,
       generatedAt: Date.now(),
       sparkline: closes.slice(-30),
       htfAligned,
       isLive,
-      marketStatus: isLive ? "LIVE" : "MARKET CLOSED",
+      marketStatus: isLive ? "LIVE" : "LAST CANDLE",
       waitReason: signalReason,
-      aiDirection: ai.direction,
-      aiConfidence: ai.confidence,
-      aiReason: ai.reason,
-      livePressure: Math.round(liveBias * 100),
-      marketTime: quote.time || latestCandleTime,
+      aiDirection: direction,
+      aiConfidence: confidence,
+      aiReason: `${source} OHLC only • strict EMA50/EMA200 + RSI14 + candle + momentum rules`,
+      livePressure,
+      marketTime: latestCandleTime,
     };
   });
