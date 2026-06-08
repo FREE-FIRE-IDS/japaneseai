@@ -20,6 +20,23 @@ export const Route = createFileRoute("/")({
 
 type Signal = Awaited<ReturnType<typeof generateSignal>>;
 
+async function showAppNotification(title: string, body: string, tag: string, onClick?: () => void) {
+  if (typeof window === "undefined" || !("Notification" in window) || Notification.permission !== "granted") return;
+  if ("serviceWorker" in navigator) {
+    const reg = await navigator.serviceWorker.ready.catch(() => null);
+    if (reg) {
+      await reg.showNotification(title, { body, icon: "/favicon.png", badge: "/favicon.png", tag, requireInteraction: tag === "jb-scan-cta" });
+      return;
+    }
+  }
+  try {
+    const notification = new Notification(title, { body, icon: "/favicon.png", tag });
+    notification.onclick = () => { window.focus(); onClick?.(); };
+  } catch {
+    setTimeout(() => onClick?.(), 0);
+  }
+}
+
 const TIMEFRAMES = [
   { value: "1min", label: "1M" },
   { value: "5min", label: "5M" },
@@ -86,16 +103,9 @@ function Index() {
       if (typeof navigator !== "undefined" && "vibrate" in navigator) {
         navigator.vibrate?.([160, 70, 160, 70, 220]);
       }
-      if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
-        const notification = new Notification(`${directionLabel} ${s.pair}`, {
-          body: `Signal ${s.confidence}% • ${s.timeframe}`,
-          icon: "/favicon.png",
-          tag: "jb-signal",
-        });
-        notification.onclick = () => window.focus();
-      }
+      await showAppNotification(`${directionLabel} ${s.pair}`, `Signal ${s.confidence}% • ${s.timeframe}`, "jb-signal");
     } catch (e) {
-      const message = e instanceof Error ? e.message : "Failed to generate signal";
+      const message = e instanceof Error && e.message ? e.message : "Real market feed unavailable right now. Try again shortly.";
       setError(message);
       if (!silent) setBanner({ title: "SCAN FAILED", body: message, tone: "wait" });
     } finally {
@@ -124,10 +134,7 @@ function Index() {
     const showPersistent = (title: string, body: string) => {
       if (swReg) {
         swReg.active?.postMessage({ type: "SHOW_NOTIFICATION", title, body, tag: "jb-scan-cta" });
-      } else {
-        const n = new Notification(title, { body, icon: "/favicon.png", tag: "jb-scan-cta" });
-        n.onclick = () => { window.focus(); onGenerate(false); };
-      }
+      } else void showAppNotification(title, body, "jb-scan-cta", () => onGenerate(false));
     };
 
     const init = async () => {
