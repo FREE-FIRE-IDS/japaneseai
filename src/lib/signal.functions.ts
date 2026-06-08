@@ -54,7 +54,7 @@ async function fetchSeries(pair: string, interval: string, size: number, key: st
   const res = await fetch(url);
   const json: { values?: Candle[]; status?: string; message?: string } = await res.json().catch(() => ({}));
   if (!res.ok || json.status === "error" || !json.values) {
-    throw new Error(json.message || `Market data error (HTTP ${res.status})`);
+    throw new Error("Primary market feed unavailable");
   }
   return [...json.values].reverse();
 }
@@ -76,7 +76,7 @@ async function fetchAlphaSeries(pair: string, interval: string, size: number, ke
   const seriesKey = `Time Series FX (${alphaInterval})`;
   const series = json[seriesKey] as Record<string, Record<string, string>> | undefined;
   if (!res.ok || apiMessage || !series) {
-    throw new Error(typeof apiMessage === "string" ? apiMessage : `Fallback market data error (HTTP ${res.status})`);
+    throw new Error("Backup market feed unavailable");
   }
 
   return Object.entries(series)
@@ -92,13 +92,18 @@ async function fetchAlphaSeries(pair: string, interval: string, size: number, ke
     .slice(-size);
 }
 
-async function fetchMarketData(pair: string, timeframe: string, twelveKey: string, alphaKey?: string) {
-  try {
-    return { candles: await fetchSeries(pair, timeframe, 260, twelveKey), source: "Twelve Data" };
-  } catch (primaryError) {
-    if (!alphaKey) throw primaryError;
-    return { candles: await fetchAlphaSeries(pair, timeframe, 260, alphaKey), source: "Fallback feed" };
+async function fetchMarketData(pair: string, timeframe: string, size: number, twelveKey?: string, alphaKey?: string) {
+  if (twelveKey) {
+    try {
+      return { candles: await fetchSeries(pair, timeframe, size, twelveKey), source: "primary" };
+    } catch { /* try backup feed */ }
   }
+  if (alphaKey) {
+    try {
+      return { candles: await fetchAlphaSeries(pair, timeframe, size, alphaKey), source: "backup" };
+    } catch { /* surface a clean app message below */ }
+  }
+  throw new Error("Real market feed unavailable right now. Try again shortly.");
 }
 
 function round(value: number, places = 5) {
