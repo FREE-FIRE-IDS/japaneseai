@@ -8,7 +8,7 @@ self.addEventListener("message", (event) => {
   if (data.type === "SHOW_NOTIFICATION") {
     const { title, body, tag } = data;
     self.registration.showNotification(title || "JAPANESE BOT", {
-      body: body || "Tap SCAN to analyze the live market",
+      body: body || "Tap SCAN to analyze the selected forex market",
       tag: tag || "jb-scan",
       icon: "/favicon.png",
       badge: "/favicon.png",

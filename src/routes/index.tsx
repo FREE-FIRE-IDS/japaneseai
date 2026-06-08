@@ -24,7 +24,6 @@ const TIMEFRAMES = [
   { value: "1min", label: "1M" },
   { value: "5min", label: "5M" },
   { value: "15min", label: "15M" },
-  { value: "30min", label: "30M" },
 ];
 
 function displayDirection(direction: "BUY" | "SELL") {
@@ -138,7 +137,7 @@ function Index() {
           await navigator.serviceWorker.ready;
         } catch { /* ignore */ }
       }
-      const fire = () => showPersistent("JAPANESE BOT READY", "Open Quotex, pick OTC pair, then tap SCAN NOW");
+      const fire = () => showPersistent("JAPANESE BOT READY", "Open Quotex, pick a forex pair, then tap SCAN NOW");
       if (Notification.permission === "granted") fire();
       else if (Notification.permission === "default") {
         const p = await Notification.requestPermission().catch(() => "denied" as NotificationPermission);
@@ -210,7 +209,7 @@ function Index() {
 
         <div>
           <label className="text-xs uppercase tracking-widest text-muted-foreground mb-2 block">Expiry / Timeframe</label>
-          <div className="grid grid-cols-4 gap-2">
+          <div className="grid grid-cols-3 gap-2">
             {TIMEFRAMES.map((t) => (
               <button
                 key={t.value}
@@ -283,13 +282,13 @@ function Index() {
             <Stat label="PRICE" value={signal.price.toFixed(5)} />
             <Stat label="MARKET" value={signal.marketStatus} />
             <Stat label="PRESSURE" value={`${signal.livePressure}%`} />
-            <Stat label="AI" value={`${signal.aiDirection} ${signal.aiConfidence}%`} />
+            <Stat label="ENGINE" value={`${signal.aiDirection} ${signal.aiConfidence}%`} />
             <Stat label="RSI" value={signal.rsi.toString()} />
-            <Stat label="SMA 20" value={signal.sma20.toFixed(5)} />
-            <Stat label="EMA 9" value={signal.ema9.toFixed(5)} />
+            <Stat label="EMA 200" value={signal.sma20.toFixed(5)} />
+            <Stat label="EMA 50" value={signal.ema9.toFixed(5)} />
           </div>
           <div className="mt-3 rounded-lg bg-secondary/40 px-3 py-2 text-xs text-muted-foreground">
-            AI CHECK: {signal.aiReason}
+            OHLC CHECK: {signal.aiReason}
           </div>
         </div>
       )}
