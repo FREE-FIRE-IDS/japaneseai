@@ -272,7 +272,7 @@ function Index() {
             <div className="text-xs tracking-[0.4em] opacity-70">DIRECTION</div>
             <div className="font-display text-5xl md:text-6xl font-black tracking-widest">{displayDirection(signal.direction)}</div>
             <div className="text-sm mt-2 tracking-wider opacity-80">
-              Confidence {signal.confidence}% • {signal.marketStatus} • HTF {signal.htfAligned ? "✓ aligned" : "× mixed"}
+              Confidence {signal.confidence}% • {signal.marketStatus} • TREND {signal.htfAligned ? "✓ aligned" : "× mixed"}
             </div>
           </div>
 
